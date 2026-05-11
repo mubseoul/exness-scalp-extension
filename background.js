@@ -131,7 +131,8 @@ async function runCycle() {
 
   // 1) Bars — prefer live Exness ticks aggregated into 1m bars; fall back to
   // Yahoo only if we don't have enough ticks buffered yet (cold start).
-  const minBarsNeeded = s.signal.rangeMinutes + 20;
+  // The +16 matches signal-engine's internal minimum (ATR(14) + 2 buffer).
+  const minBarsNeeded = s.signal.rangeMinutes + 16;
   let bars = [];
   let source = null;
   try {
@@ -171,9 +172,10 @@ async function runCycle() {
     return;
   }
   if (bars.length < minBarsNeeded) {
+    const minutesLeft = Math.max(1, minBarsNeeded - bars.length);
     await broadcastCommentary(tab.id, {
       kind: 'waiting',
-      message: `Insufficient bars (${bars.length} of ${minBarsNeeded}). Building from Exness ticks…`,
+      message: `Warming up: ${bars.length} of ${minBarsNeeded} bars built from ticks. ~${minutesLeft} min until first signal possible.`,
     });
     return;
   }
