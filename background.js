@@ -144,10 +144,12 @@ async function runCycle() {
     return;
   }
 
-  // 4) Cross-check with Exness DOM price (content script holds it)
+  // 4) Cross-check with Exness DOM price (content script holds it).
+  // Threshold of $5 absorbs GC=F basis if we fell back to futures; for spot
+  // XAUUSD=X the typical delta is < $0.50.
   const pageState = await sendToContent(tab.id, { type: 'GET_PAGE_PRICE' });
   const exnessMid = pageState?.mid;
-  const xcheck = crossCheck(signal.entry, exnessMid, 2.0);
+  const xcheck = crossCheck(signal.entry, exnessMid, 5.0);
   if (!xcheck.ok) {
     trace('cycle', 'cross_check_failed', { xcheck, exnessMid, yahoo: signal.entry });
     await sendToContent(tab.id, { type: 'BLOCKED', verdict: { allow: false, reason: 'price_diverged', ...xcheck }, signal });
