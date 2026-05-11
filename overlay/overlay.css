@@ -91,6 +91,12 @@
 #exscalp-overlay button.approve:hover { background: rgba(22,196,127,0.12); }
 #exscalp-overlay button.reject:hover  { background: rgba(255,92,117,0.10); }
 
+#exscalp-overlay .hr {
+  height: 1px;
+  background: var(--exs-border);
+  margin: 8px 0;
+}
+
 #exscalp-overlay .reason {
   margin-top: 6px;
   padding: 6px 8px;

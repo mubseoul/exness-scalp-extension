@@ -12,8 +12,8 @@
 (() => {
   if (window.__exscalp_loaded) return;
   window.__exscalp_loaded = true;
-  window.__exscalp_version = '0.2.0';
-  console.info('[ExScalp] content script loaded v0.2.0 — overlay mounting');
+  window.__exscalp_version = '0.3.0';
+  console.info('[ExScalp] content script loaded v0.3.0 — overlay mounting');
 
   const SETTINGS_KEY = 'exscalp_v1';
   const overlay = createOverlay();
@@ -24,19 +24,34 @@
   let pending = null;
   let countdownTimer = null;
   let priceTimer = null;
+  let stateTimer = null;
   let lastPrice = { bid: null, ask: null, mid: null, at: 0 };
 
   refreshSettings().then(() => {
     overlay.setStatus(statusLabel());
+    overlay.setLiveState(settings);
     startPricePoll();
+    startStatePoll();
   });
 
+  // chrome.storage.onChanged fires the moment background.js writes; combined
+  // with the 3s state poll, the overlay stays at most ~3s behind reality.
   chrome.storage.onChanged.addListener((changes) => {
     if (changes[SETTINGS_KEY]) {
       settings = changes[SETTINGS_KEY].newValue;
       overlay.setStatus(statusLabel());
+      overlay.setLiveState(settings);
     }
   });
+
+  function startStatePoll() {
+    if (stateTimer) clearInterval(stateTimer);
+    stateTimer = setInterval(async () => {
+      await refreshSettings();
+      overlay.setStatus(statusLabel());
+      overlay.setLiveState(settings);
+    }, 3000);
+  }
 
   async function refreshSettings() {
     const s = await chrome.storage.local.get(SETTINGS_KEY);
@@ -255,8 +270,14 @@
       </header>
       <div class="body">
         <div class="row"><span class="k">XAUUSD bid/ask</span><span class="v price">–</span></div>
-        <div class="row"><span class="k">Last tick</span><span class="v reason-text">–</span></div>
+        <div class="row"><span class="k">Last bar</span><span class="v last-bar">–</span></div>
+        <div class="row"><span class="k">Last cycle</span><span class="v reason-text">–</span></div>
+        <div class="row"><span class="k">Last signal</span><span class="v last-signal">–</span></div>
+        <div class="row"><span class="k">Trades / hour</span><span class="v trades-hour">–</span></div>
+        <div class="row"><span class="k">Today loss</span><span class="v today-loss">–</span></div>
+        <div class="row"><span class="k">Open pos.</span><span class="v open-pos">–</span></div>
         <div class="pending" style="display:none">
+          <div class="hr"></div>
           <div class="row"><span class="k">Side</span><span class="v side">–</span></div>
           <div class="row"><span class="k">Entry</span><span class="v entry">–</span></div>
           <div class="row"><span class="k">SL</span><span class="v sl">–</span></div>
@@ -271,25 +292,32 @@
           <div class="countdown">–</div>
         </div>
       </div>
-      <div class="footer"><span class="left">v0.1</span><span class="right">drag to move</span></div>
+      <div class="footer"><span class="left">v0.3</span><span class="right">drag to move</span></div>
     `;
 
     const q = (s) => root.querySelector(s);
-    const statusEl  = q('.status');
-    const priceEl   = q('.price');
-    const reasonEl  = q('.reason-text');
-    const pendBlock = q('.pending');
-    const sideEl    = q('.side');
-    const entryEl   = q('.entry');
-    const slEl      = q('.sl');
-    const tpEl      = q('.tp');
-    const metaEl    = q('.meta');
-    const claudeEl  = q('.claude');
-    const claudeRsn = q('.claude-reason');
-    const countdown = q('.countdown');
+    const statusEl   = q('.status');
+    const priceEl    = q('.price');
+    const reasonEl   = q('.reason-text');
+    const lastBarEl  = q('.last-bar');
+    const lastSigEl  = q('.last-signal');
+    const tradesHrEl = q('.trades-hour');
+    const lossEl     = q('.today-loss');
+    const openPosEl  = q('.open-pos');
+    const pendBlock  = q('.pending');
+    const sideEl     = q('.side');
+    const entryEl    = q('.entry');
+    const slEl       = q('.sl');
+    const tpEl       = q('.tp');
+    const metaEl     = q('.meta');
+    const claudeEl   = q('.claude');
+    const claudeRsn  = q('.claude-reason');
+    const countdown  = q('.countdown');
     const approveBtn = q('.approve');
     const rejectBtn  = q('.reject');
     const collapseBtn = q('.collapse');
+
+    const fmtTime = (ts) => ts ? new Date(ts).toLocaleTimeString() : '–';
 
     const api = {
       root,
@@ -310,6 +338,17 @@
         }
       },
       setLastTickReason(r) { reasonEl.textContent = r || '–'; },
+      setLiveState(s) {
+        if (!s) return;
+        lastBarEl.textContent  = fmtTime(s.state?.lastBarTs);
+        lastSigEl.textContent  = fmtTime(s.state?.lastSignalTs);
+        tradesHrEl.textContent = `${s.state?.tradesThisHour || 0} / ${s.risk?.maxTradesPerHour ?? '?'}`;
+        const loss = s.state?.todayLossUsd || 0;
+        const cap  = s.risk?.maxDailyLossUsd ?? 0;
+        lossEl.textContent = `$${loss.toFixed(2)} / $${cap}`;
+        lossEl.style.color = loss >= cap * 0.7 ? 'var(--exs-short)' : '';
+        openPosEl.textContent = `${s.state?.openPositions || 0} / ${s.risk?.maxOpenPositions ?? '?'}`;
+      },
       showBlocked(verdict, sig) {
         reasonEl.textContent = `blocked: ${verdict?.reason || 'unknown'}${sig ? ` (${sig.side} @ ${sig.entry})` : ''}`;
       },
