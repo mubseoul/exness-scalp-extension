@@ -260,7 +260,15 @@ async function runCycle() {
   let signal = null, reason = '', signalKind = '';
 
   if (strategy === 'breakout' || strategy === 'both') {
-    const bo = detectBreakout(bars, s.signal);
+    // detectBreakout needs slAtrMult/tpAtrMult for level calculation but
+    // those live under risk.*, not signal.*. Merge them in so SL/TP don't
+    // come out NaN.
+    const signalCfg = {
+      ...s.signal,
+      tpAtrMult: s.risk.tpAtrMult,
+      slAtrMult: s.risk.slAtrMult,
+    };
+    const bo = detectBreakout(bars, signalCfg);
     if (bo.signal) {
       signal = bo.signal;
       reason = bo.reason;
