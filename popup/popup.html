@@ -1,101 +1,176 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="utf-8">
-  <link rel="stylesheet" href="popup.css">
+  <meta charset="UTF-8" />
   <title>Exness Scalp</title>
+  <link rel="stylesheet" href="popup.css" />
 </head>
 <body>
-  <div class="tabs">
-    <button data-tab="status"  class="active">Status</button>
-    <button data-tab="settings">Settings</button>
-    <button data-tab="calib">Calibrate</button>
-    <button data-tab="logs">Logs</button>
-  </div>
-
-  <section class="tab" data-tab="status">
-    <div class="header-row">
-      <strong>Master switch</strong>
-      <label class="switch"><input type="checkbox" id="enabled"><span></span></label>
+  <header class="hd">
+    <h1>Exness Scalp</h1>
+    <div class="hd-meta">
+      <span id="statusDot" class="status-dot" title=""></span>
+      <span id="liveBadge" class="badge dim">—</span>
+      <button id="masterToggleBtn" class="btn-sm bid-toggle is-paused">Armed: —</button>
+      <button id="runNowBtn" class="btn-sm">Run now</button>
     </div>
-    <div class="row"><span class="k">Paused</span><label class="switch sm"><input type="checkbox" id="paused"><span></span></label></div>
-    <div class="row"><span class="k">Confirm each trade</span><label class="switch sm"><input type="checkbox" id="confirmEachTrade"><span></span></label></div>
-    <div class="row"><span class="k">Live account</span><span class="v" id="liveLockState">locked</span></div>
-    <button class="full" id="unlockLiveBtn">Unlock live trading…</button>
-    <div class="hr"></div>
-    <div class="row"><span class="k">Last bar</span><span class="v" id="lastBar">–</span></div>
-    <div class="row"><span class="k">Last signal</span><span class="v" id="lastSignal">–</span></div>
-    <div class="row"><span class="k">Trades this hour</span><span class="v" id="hourTrades">–</span></div>
-    <div class="row"><span class="k">Today loss</span><span class="v" id="todayLoss">–</span></div>
-    <button class="full primary" id="runNowBtn">Run cycle now</button>
-    <button class="full" id="claudeProbe">Test claude.ai connection</button>
-    <div class="hr"></div>
-    <div class="recent" id="recent"></div>
-  </section>
+  </header>
 
-  <section class="tab hidden" data-tab="settings">
-    <h3>Signal</h3>
-    <div class="row"><span class="k">Range (min)</span><input type="number" id="rangeMinutes" min="3" max="60"></div>
-    <div class="row"><span class="k">Breakout × ATR</span><input type="number" id="breakoutAtrMult" step="0.05" min="0.1" max="2"></div>
-    <div class="row"><span class="k">Min ATR ($)</span><input type="number" id="minAtrUsd" step="0.1" min="0"></div>
-    <div class="row"><span class="k">Cooldown (s)</span><input type="number" id="cooldownSec" min="10"></div>
-    <div class="row"><span class="k">Poll (s)</span><input type="number" id="pollEverySec" min="5" max="120"></div>
-    <div class="row"><span class="k">Trade 24/7 (test)</span><label class="switch sm"><input type="checkbox" id="ignoreSession"><span></span></label></div>
-    <h3>Risk</h3>
-    <div class="row"><span class="k">Lot size</span><input type="number" id="lotSize" step="0.01" min="0.01"></div>
-    <div class="row"><span class="k">TP × ATR</span><input type="number" id="tpAtrMult" step="0.1" min="0.5"></div>
-    <div class="row"><span class="k">SL × ATR</span><input type="number" id="slAtrMult" step="0.1" min="0.3"></div>
-    <div class="row"><span class="k">Max daily loss ($)</span><input type="number" id="maxDailyLossUsd" min="0"></div>
-    <div class="row"><span class="k">Max trades / hr</span><input type="number" id="maxTradesPerHour" min="1"></div>
-    <div class="row"><span class="k">Max trades / day</span><input type="number" id="maxTradesPerDay" min="1"></div>
-    <h3>Claude veto</h3>
-    <div class="row"><span class="k">Enabled</span><label class="switch sm"><input type="checkbox" id="claudeEnabled"><span></span></label></div>
-    <div class="row"><span class="k">Min confidence</span><input type="number" id="minConfidence" min="0" max="100"></div>
-    <div class="row"><span class="k">Timeout (s)</span><input type="number" id="claudeTimeoutSec" min="3" max="60"></div>
-    <button class="full primary" id="saveSettings">Save settings</button>
-    <div class="hint">After changing poll interval, click "Rebuild alarm".</div>
-    <button class="full" id="rebuildAlarm">Rebuild alarm</button>
-  </section>
+  <nav class="tabs">
+    <button class="tab active" data-tab="status">Status</button>
+    <button class="tab" data-tab="settings">Settings</button>
+    <button class="tab" data-tab="calib">Calibrate</button>
+    <button class="tab" data-tab="logs">Logs <span id="logsCount" class="badge">0</span></button>
+  </nav>
 
-  <section class="tab hidden" data-tab="calib">
-    <p class="hint">
-      Right-click an element on the Exness page → Inspect → copy a stable CSS selector,
-      then paste it here. The extension cannot trade without these.
-    </p>
-    <div class="row"><span class="k">Bid price</span><input type="text" id="sel_bidPrice" placeholder=".bid .price"></div>
-    <div class="row"><span class="k">Ask price</span><input type="text" id="sel_askPrice" placeholder=".ask .price"></div>
-    <div class="row"><span class="k">Lot input</span><input type="text" id="sel_lotInput" placeholder="input[name=volume]"></div>
-    <div class="row"><span class="k">SL input</span><input type="text" id="sel_slInput" placeholder="input[name=stop_loss]"></div>
-    <div class="row"><span class="k">TP input</span><input type="text" id="sel_tpInput" placeholder="input[name=take_profit]"></div>
-    <div class="row"><span class="k">Buy button</span><input type="text" id="sel_buyButton" placeholder="button.buy"></div>
-    <div class="row"><span class="k">Sell button</span><input type="text" id="sel_sellButton" placeholder="button.sell"></div>
-    <div class="row"><span class="k">Confirm button</span><input type="text" id="sel_confirmButton" placeholder="optional"></div>
-    <button class="full primary" id="saveSelectors">Save selectors</button>
-    <div class="hint">
-      Tip: open the Exness tab, paste a candidate selector into DevTools as
-      <code>$$('your-selector')</code> first to verify it matches exactly one element.
-    </div>
-  </section>
+  <main>
+    <!-- ============================== STATUS ============================== -->
+    <section id="tab-status" class="tab-panel active">
+      <div class="status-card" id="statusCard">
+        <h2 id="statusHead">Disarmed</h2>
+        <p id="statusBody" class="muted">Open <a href="https://my.exness.global/webtrading/" target="_blank">my.exness.global/webtrading</a> in any tab, then flip <b>Armed</b> on.</p>
+        <div class="status-channels">
+          <div class="status-channel" id="channelExness">
+            <span class="channel-dot"></span>
+            <span class="channel-label">Exness DOM</span>
+            <span class="channel-detail" id="channelExnessDetail">no tab</span>
+          </div>
+          <div class="status-channel" id="channelYahoo">
+            <span class="channel-dot"></span>
+            <span class="channel-label">Price feed</span>
+            <span class="channel-detail" id="channelYahooDetail">idle</span>
+          </div>
+          <div class="status-channel" id="channelClaude">
+            <span class="channel-dot"></span>
+            <span class="channel-label">Claude veto</span>
+            <span class="channel-detail" id="channelClaudeDetail">unknown</span>
+          </div>
+        </div>
+      </div>
 
-  <section class="tab hidden" data-tab="logs">
-    <div class="row">
-      <button id="refreshLogs">Refresh</button>
-      <button id="copyLogs">Copy JSON</button>
-      <button id="clearLogs" class="danger">Clear</button>
-    </div>
-    <pre id="logsOut">–</pre>
-  </section>
+      <div class="stats-grid">
+        <div class="stat-card" data-tone="accent">
+          <span class="stat-num" id="statCyclesToday">0</span>
+          <span class="stat-label">Cycles today</span>
+        </div>
+        <div class="stat-card" data-tone="success">
+          <span class="stat-num" id="statSignalsToday">0</span>
+          <span class="stat-label">Signals today</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-num" id="statTradesToday">0</span>
+          <span class="stat-label">Trades today</span>
+        </div>
+        <div class="stat-card" data-tone="danger">
+          <span class="stat-num" id="statTodayLoss">$0</span>
+          <span class="stat-label">Loss / cap</span>
+        </div>
+      </div>
 
+      <div class="rate-row">
+        <div class="rate-cell"><span class="rate-num" id="rateXau">—</span><span class="rate-lbl">XAU bid</span></div>
+        <div class="rate-cell"><span class="rate-num" id="rateAtr">—</span><span class="rate-lbl">ATR</span></div>
+        <div class="rate-cell"><span class="rate-num" id="rateCooldown">—</span><span class="rate-lbl">cooldown</span></div>
+        <div class="rate-cell"><span class="rate-num" id="rateClaudeMs">—</span><span class="rate-lbl">Claude ms</span></div>
+      </div>
+
+      <h3 class="section-title">Recent activity <button id="claudeProbe" class="btn-sm">Test Claude</button></h3>
+      <div id="historyList" class="history-list">
+        <p class="empty">No activity yet.</p>
+      </div>
+    </section>
+
+    <!-- ============================== SETTINGS ============================== -->
+    <section id="tab-settings" class="tab-panel">
+      <fieldset>
+        <legend>Master</legend>
+        <label class="row">Confirm each trade <input type="checkbox" id="confirmEachTrade"></label>
+        <label class="row">Paused (signals run, no orders) <input type="checkbox" id="paused"></label>
+        <label class="row">Trade 24/7 (test only) <input type="checkbox" id="ignoreSession"></label>
+        <label class="row danger" id="liveRow" style="display:none">
+          Live account is <span id="liveLockState">locked</span>
+          <button id="unlockLiveBtn" class="btn-sm">Unlock…</button>
+        </label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Signal</legend>
+        <div class="grid">
+          <label>Range (min)<input type="number" id="rangeMinutes" min="3" max="60"></label>
+          <label>Breakout × ATR<input type="number" id="breakoutAtrMult" step="0.05" min="0.1" max="2"></label>
+          <label>Min ATR ($)<input type="number" id="minAtrUsd" step="0.1" min="0"></label>
+          <label>Cooldown (s)<input type="number" id="cooldownSec" min="10"></label>
+          <label>Poll (s)<input type="number" id="pollEverySec" min="5" max="120"></label>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Risk</legend>
+        <div class="grid">
+          <label>Lot size<input type="number" id="lotSize" step="0.01" min="0.01"></label>
+          <label>TP × ATR<input type="number" id="tpAtrMult" step="0.1" min="0.5"></label>
+          <label>SL × ATR<input type="number" id="slAtrMult" step="0.1" min="0.3"></label>
+          <label>Max daily loss ($)<input type="number" id="maxDailyLossUsd" min="0"></label>
+          <label>Max trades / hr<input type="number" id="maxTradesPerHour" min="1"></label>
+          <label>Max trades / day<input type="number" id="maxTradesPerDay" min="1"></label>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Claude veto</legend>
+        <label class="row">Enabled <input type="checkbox" id="claudeEnabled"></label>
+        <div class="grid">
+          <label>Min confidence<input type="number" id="minConfidence" min="0" max="100"></label>
+          <label>Timeout (s)<input type="number" id="claudeTimeoutSec" min="3" max="60"></label>
+        </div>
+      </fieldset>
+
+      <div class="footer-actions">
+        <button id="saveSettings" class="btn-primary">Save settings</button>
+        <button id="rebuildAlarm" class="btn-secondary">Rebuild alarm</button>
+      </div>
+    </section>
+
+    <!-- ============================== CALIBRATE ============================== -->
+    <section id="tab-calib" class="tab-panel">
+      <fieldset>
+        <legend>Exness selectors</legend>
+        <small>Defaults work as of Exness's 2026-05 build. If Exness changes their markup, paste new selectors here. Use <code>[N]:</code> prefix for positional (e.g. <code>[1]:input.x</code>).</small>
+        <label>Bid price<input type="text" id="sel_bidPrice"></label>
+        <label>Ask price<input type="text" id="sel_askPrice"></label>
+        <label>Lot input<input type="text" id="sel_lotInput"></label>
+        <label>SL input<input type="text" id="sel_slInput"></label>
+        <label>TP input<input type="text" id="sel_tpInput"></label>
+        <label>Buy button<input type="text" id="sel_buyButton"></label>
+        <label>Sell button<input type="text" id="sel_sellButton"></label>
+        <label>Confirm button<input type="text" id="sel_confirmButton"></label>
+      </fieldset>
+      <div class="footer-actions">
+        <button id="saveSelectors" class="btn-primary">Save selectors</button>
+      </div>
+    </section>
+
+    <!-- ============================== LOGS ============================== -->
+    <section id="tab-logs" class="tab-panel">
+      <div class="row gap">
+        <button id="refreshLogs" class="btn-sm">Refresh</button>
+        <button id="copyLogs" class="btn-sm">Copy JSON</button>
+        <button id="clearLogs" class="btn-sm" style="color:var(--danger)">Clear</button>
+      </div>
+      <pre id="logsOut">—</pre>
+    </section>
+  </main>
+
+  <!-- Live unlock modal -->
   <div class="modal hidden" id="liveModal">
     <div class="modal-inner">
       <h3>Unlock live trading</h3>
-      <p>This account is detected as <b>live (real money)</b>. The extension will refuse to
-      place orders until you type the confirmation phrase exactly:</p>
+      <p>This account is detected as <b>live (real money)</b>. Type the phrase to enable order placement:</p>
       <pre class="phrase" id="phraseRef"></pre>
       <input type="text" id="phraseInput" placeholder="Type the phrase">
       <div class="modal-actions">
-        <button id="cancelUnlock">Cancel</button>
-        <button class="primary" id="confirmUnlock">Unlock</button>
+        <button id="cancelUnlock" class="btn-secondary">Cancel</button>
+        <button id="confirmUnlock" class="btn-primary">Unlock</button>
       </div>
     </div>
   </div>

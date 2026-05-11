@@ -125,7 +125,8 @@ async function runCycle() {
     trace('cycle', 'no_bars', {});
     return;
   }
-  await updateState({ lastBarTs: bundle.bars[bundle.bars.length - 1].t });
+  const lastBar = bundle.bars[bundle.bars.length - 1];
+  await updateState({ lastBarTs: lastBar.t, lastBar });
 
   // 2) Signal
   const { signal, reason } = detectBreakout(bundle.bars, s.signal);
@@ -134,6 +135,7 @@ async function runCycle() {
     await sendToContent(tab.id, { type: 'TICK', reason, lastBar: bundle.bars.at(-1) });
     return;
   }
+  await updateState({ lastAtr: signal.atr });
   trace('cycle', 'signal_detected', { side: signal.side, entry: signal.entry, atr: signal.atr });
 
   // 3) Risk gate
@@ -163,6 +165,7 @@ async function runCycle() {
       model: s.claude.model,
       timeoutSec: s.claude.timeoutSec,
     });
+    await updateState({ lastClaudeMs: claudeVerdict.tookMs, lastClaudeOkTs: claudeVerdict.confidence > 0 ? Date.now() : (await getSettings()).state.lastClaudeOkTs });
     if (claudeVerdict.verdict !== 'go' || claudeVerdict.confidence < s.claude.minConfidence) {
       trace('cycle', 'claude_skipped', { signal, claudeVerdict });
       await sendToContent(tab.id, { type: 'BLOCKED', verdict: { allow: false, reason: 'claude_skip', ...claudeVerdict }, signal });

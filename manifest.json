@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Exness XAUUSD Scalp Assistant",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "AI-assisted scalp signals on XAUUSD for the Exness web trader. Hybrid breakout detection (deterministic JS) + Claude veto via your claude.ai session. Confirm-per-trade by default.",
   "permissions": [
     "storage",

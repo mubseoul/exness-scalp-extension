@@ -4,76 +4,190 @@ import { LIVE_UNLOCK_PHRASE } from '../lib/defaults.js';
 import { testClaudeWebConnection } from '../lib/claude-web.js';
 
 const $ = (s) => document.querySelector(s);
+const REFRESH_MS = 2000;
 
-// --- Tabs ----------------------------------------------------------------
+let settings = null;
+let refreshTimer = null;
 
-document.querySelectorAll('.tabs button').forEach(btn => {
+// ----- Tabs -----
+
+document.querySelectorAll('.tabs .tab').forEach(btn => {
   btn.addEventListener('click', () => {
-    document.querySelectorAll('.tabs button').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tabs .tab').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
-    document.querySelectorAll('.tab').forEach(t => t.classList.add('hidden'));
-    document.querySelector(`.tab[data-tab="${btn.dataset.tab}"]`).classList.remove('hidden');
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
     if (btn.dataset.tab === 'logs') refreshLogs();
-    if (btn.dataset.tab === 'status') paintStatus();
   });
 });
 
-// --- Status --------------------------------------------------------------
+// ----- Status painting -----
 
-async function paintStatus() {
-  const s = await getSettings();
-  $('#enabled').checked          = !!s.enabled;
-  $('#paused').checked           = !!s.paused;
-  $('#confirmEachTrade').checked = !!s.confirmEachTrade;
-  $('#liveLockState').textContent = s.liveAccountUnlocked ? 'UNLOCKED' : 'locked';
-  $('#liveLockState').style.color = s.liveAccountUnlocked ? 'var(--warn)' : 'var(--fg-dim)';
-
-  $('#lastBar').textContent     = s.state.lastBarTs    ? new Date(s.state.lastBarTs).toLocaleTimeString()    : '–';
-  $('#lastSignal').textContent  = s.state.lastSignalTs ? new Date(s.state.lastSignalTs).toLocaleTimeString() : '–';
-  $('#hourTrades').textContent  = `${s.state.tradesThisHour || 0} / ${s.risk.maxTradesPerHour}`;
-  $('#todayLoss').textContent   = `$${(s.state.todayLossUsd || 0).toFixed(2)} / $${s.risk.maxDailyLossUsd}`;
-
-  const recent = $('#recent');
-  recent.innerHTML = '';
-  (s.state.history || []).slice(0, 6).forEach(h => {
-    const d = document.createElement('div');
-    d.className = 'item';
-    const t = new Date(h.at).toLocaleTimeString();
-    const side = h.pending?.side ? h.pending.side.toUpperCase() : '';
-    const detail = h.pending ? `@ ${h.pending.entry}` : '';
-    d.textContent = `${t} • ${h.kind} ${side} ${detail}`;
-    recent.appendChild(d);
-  });
+function statusVerdict(s) {
+  if (!s.enabled) return { head: 'Disarmed', body: 'Flip the Armed toggle to start watching for breakouts.', cls: '' };
+  if (s.paused)   return { head: 'Paused',   body: 'Signals will run, but no orders will be placed.', cls: 'paused' };
+  return { head: 'Armed — watching XAUUSD', body: 'Polling Yahoo every 30s for 15-min range breakouts.', cls: 'active' };
 }
 
-$('#enabled').addEventListener('change', async (e) => {
-  await saveSettings({ enabled: e.target.checked });
+function ago(ts) {
+  if (!ts) return '—';
+  const d = Date.now() - ts;
+  if (d < 60_000)  return `${Math.floor(d / 1000)}s ago`;
+  if (d < 3_600_000) return `${Math.floor(d / 60_000)}m ago`;
+  return `${Math.floor(d / 3_600_000)}h ago`;
+}
+
+async function findExnessTab() {
+  const tabs = await chrome.tabs.query({
+    url: [
+      'https://my.exness.global/webtrading/*',
+      'https://my.exness.com/webtrading/*',
+    ],
+  });
+  return tabs[0] || null;
+}
+
+async function paintStatus() {
+  settings = await getSettings();
+  const st = settings.state || {};
+  const verdict = statusVerdict(settings);
+
+  // Header
+  $('#statusHead').textContent = verdict.head;
+  $('#statusBody').textContent = verdict.body;
+  $('#statusCard').className = 'status-card ' + verdict.cls;
+  $('#statusDot').className = 'status-dot' + (verdict.cls === 'active' ? ' active' : (verdict.cls === 'paused' ? ' warn' : ''));
+
+  $('#liveBadge').textContent = settings.liveAccountUnlocked ? 'LIVE UNLOCKED' : 'demo-safe';
+  $('#liveBadge').style.color = settings.liveAccountUnlocked ? 'var(--warning)' : 'var(--success)';
+
+  const masterBtn = $('#masterToggleBtn');
+  masterBtn.textContent = settings.enabled ? 'Armed: ON' : 'Armed: OFF';
+  masterBtn.className = 'btn-sm bid-toggle ' + (settings.enabled ? 'is-active' : 'is-paused');
+
+  // Channels
+  const exnessTab = await findExnessTab();
+  setChannel('Exness', exnessTab ? 'active' : 'danger', exnessTab ? new URL(exnessTab.url).host : 'no tab open');
+
+  const lastBarFresh = st.lastBarTs && (Date.now() - st.lastBarTs) < 5 * 60 * 1000;
+  setChannel('Yahoo', lastBarFresh ? 'active' : 'warn', lastBarFresh ? `bar ${ago(st.lastBarTs)}` : 'no data');
+
+  const claudeOk = st.lastClaudeOkTs;
+  const claudeFresh = claudeOk && (Date.now() - claudeOk) < 30 * 60 * 1000;
+  setChannel('Claude', claudeFresh ? 'active' : 'warn',
+    !settings.claude.enabled ? 'veto off'
+    : claudeOk ? `OK ${ago(claudeOk)}` : 'untested');
+
+  // Stats
+  const history = st.history || [];
+  const todayStart = new Date(); todayStart.setUTCHours(0,0,0,0);
+  const todays = history.filter(h => h.at >= todayStart.getTime());
+  const trades = todays.filter(h => h.kind === 'placed').length;
+  // Cycles & signals are approximations — derive from trace later if needed
+  $('#statCyclesToday').textContent  = approxCyclesToday(st);
+  $('#statSignalsToday').textContent = todays.length;
+  $('#statTradesToday').textContent  = trades;
+
+  const loss = st.todayLossUsd || 0;
+  const cap  = settings.risk.maxDailyLossUsd;
+  $('#statTodayLoss').textContent = `$${loss.toFixed(0)} / $${cap}`;
+  $('#statTodayLoss').parentElement.style.borderColor = loss >= cap * 0.7 ? 'var(--danger)' : '';
+
+  // Rate row
+  const lastBar = st.lastBar;
+  $('#rateXau').textContent = lastBar?.c ? lastBar.c.toFixed(2) : '—';
+  $('#rateAtr').textContent = st.lastAtr ? `$${st.lastAtr.toFixed(2)}` : '—';
+  const sinceSig = st.lastSignalTs ? Math.max(0, settings.signal.cooldownSec - Math.floor((Date.now() - st.lastSignalTs) / 1000)) : 0;
+  $('#rateCooldown').textContent = sinceSig > 0 ? `${sinceSig}s` : 'ready';
+  $('#rateClaudeMs').textContent = st.lastClaudeMs ? `${st.lastClaudeMs}` : '—';
+
+  // History list
+  renderHistory(history);
+
+  // Live unlock row visibility
+  const liveRow = $('#liveRow');
+  if (exnessTab && /\/demo/i.test(exnessTab.url) === false) {
+    liveRow.style.display = '';
+    $('#liveLockState').textContent = settings.liveAccountUnlocked ? 'UNLOCKED' : 'locked';
+  } else {
+    liveRow.style.display = 'none';
+  }
+}
+
+function approxCyclesToday(st) {
+  if (!st.lastBarTs) return 0;
+  // We don't store a counter; estimate from cycle alarm interval
+  const today = new Date(); today.setUTCHours(0,0,0,0);
+  const dayMs = Date.now() - today.getTime();
+  const period = (settings.signal?.pollEverySec || 30) * 1000;
+  return Math.floor(dayMs / Math.max(period, 30_000));
+}
+
+function setChannel(name, state, detail) {
+  const root = $('#channel' + name);
+  if (!root) return;
+  root.classList.remove('active', 'warn', 'danger');
+  if (state) root.classList.add(state);
+  $('#channel' + name + 'Detail').textContent = detail;
+}
+
+function renderHistory(history) {
+  const list = $('#historyList');
+  list.innerHTML = '';
+  if (!history.length) {
+    const p = document.createElement('p');
+    p.className = 'empty';
+    p.textContent = 'No activity yet. Run a cycle to populate.';
+    list.appendChild(p);
+    return;
+  }
+  for (const h of history.slice(0, 8)) {
+    const div = document.createElement('div');
+    div.className = `history-item ${h.kind || ''}`;
+    const t = new Date(h.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const side = h.pending?.side ? h.pending.side.toUpperCase() : '';
+    const detail = h.pending
+      ? `${side} @ ${h.pending.entry} → SL ${h.pending.sl} / TP ${h.pending.tp}`
+      : (h.error || h.pendingId?.slice(0,8) || '');
+    div.innerHTML = `
+      <span class="h-when">${t}</span>
+      <span class="h-kind">${h.kind}</span>
+      <span class="h-detail">${detail}</span>
+    `;
+    list.appendChild(div);
+  }
+}
+
+// ----- Master / toggles -----
+
+$('#masterToggleBtn').addEventListener('click', async () => {
+  const next = !settings.enabled;
+  await saveSettings({ enabled: next });
   paintStatus();
 });
-$('#paused').addEventListener('change', async (e) => {
-  await saveSettings({ paused: e.target.checked });
-  paintStatus();
-});
-$('#confirmEachTrade').addEventListener('change', async (e) => {
-  await saveSettings({ confirmEachTrade: e.target.checked });
-});
+
 $('#runNowBtn').addEventListener('click', async () => {
-  $('#runNowBtn').textContent = 'Running…';
+  $('#runNowBtn').textContent = '…';
   await chrome.runtime.sendMessage({ type: 'RUN_NOW' });
-  $('#runNowBtn').textContent = 'Run cycle now';
-  paintStatus();
+  setTimeout(() => { $('#runNowBtn').textContent = 'Run now'; paintStatus(); }, 600);
 });
+
 $('#claudeProbe').addEventListener('click', async () => {
   $('#claudeProbe').textContent = 'Testing…';
   try {
     const r = await testClaudeWebConnection();
-    $('#claudeProbe').textContent = `OK: ${r.orgName}`;
+    $('#claudeProbe').textContent = `OK: ${r.orgName?.slice(0, 14) || 'org'}`;
+    // Background also records lastClaudeOkTs when veto succeeds.
+    const cur = await getSettings();
+    cur.state.lastClaudeOkTs = Date.now();
+    await chrome.storage.local.set({ exscalp_v1: cur });
   } catch (e) {
-    $('#claudeProbe').textContent = `Fail: ${e.message.slice(0, 30)}…`;
+    $('#claudeProbe').textContent = `Fail`;
   }
+  setTimeout(() => { $('#claudeProbe').textContent = 'Test Claude'; paintStatus(); }, 2500);
 });
 
-// --- Live unlock ---------------------------------------------------------
+// ----- Live unlock -----
 
 $('#unlockLiveBtn').addEventListener('click', () => {
   $('#phraseRef').textContent = LIVE_UNLOCK_PHRASE;
@@ -88,13 +202,15 @@ $('#confirmUnlock').addEventListener('click', async () => {
     $('#liveModal').classList.add('hidden');
     paintStatus();
   } else {
-    $('#phraseInput').style.borderColor = 'var(--short)';
+    $('#phraseInput').style.borderColor = 'var(--danger)';
   }
 });
 
-// --- Settings ------------------------------------------------------------
+// ----- Settings tab -----
 
 const SETTINGS_FIELDS = [
+  ['confirmEachTrade', 'confirmEachTrade'],
+  ['paused',           'paused'],
   ['rangeMinutes',     'signal.rangeMinutes'],
   ['breakoutAtrMult',  'signal.breakoutAtrMult'],
   ['minAtrUsd',        'signal.minAtrUsd'],
@@ -154,7 +270,7 @@ $('#rebuildAlarm').addEventListener('click', async () => {
   setTimeout(() => $('#rebuildAlarm').textContent = 'Rebuild alarm', 1200);
 });
 
-// --- Calibration ---------------------------------------------------------
+// ----- Calibration -----
 
 const SELECTOR_FIELDS = [
   'bidPrice','askPrice','lotInput','slInput','tpInput',
@@ -163,9 +279,7 @@ const SELECTOR_FIELDS = [
 
 async function paintSelectors() {
   const s = await getSettings();
-  for (const k of SELECTOR_FIELDS) {
-    $('#sel_' + k).value = s.exness.selectors[k] || '';
-  }
+  for (const k of SELECTOR_FIELDS) $('#sel_' + k).value = s.exness.selectors[k] || '';
 }
 
 $('#saveSelectors').addEventListener('click', async () => {
@@ -177,11 +291,12 @@ $('#saveSelectors').addEventListener('click', async () => {
   setTimeout(() => $('#saveSelectors').textContent = 'Save selectors', 1200);
 });
 
-// --- Logs ----------------------------------------------------------------
+// ----- Logs -----
 
 async function refreshLogs() {
   const events = await getTrace();
   const stats = await getTraceStats();
+  $('#logsCount').textContent = String(stats.count);
   const lines = events.slice(-200).map(e =>
     `${new Date(e.ts).toISOString().slice(11,19)} [${e.src}/${e.type}] ${JSON.stringify(e.data || {}).slice(0, 220)}`
   ).join('\n');
@@ -189,10 +304,7 @@ async function refreshLogs() {
 }
 
 $('#refreshLogs').addEventListener('click', refreshLogs);
-$('#clearLogs').addEventListener('click', async () => {
-  await clearTrace();
-  refreshLogs();
-});
+$('#clearLogs').addEventListener('click', async () => { await clearTrace(); refreshLogs(); });
 $('#copyLogs').addEventListener('click', async () => {
   const events = await getTrace();
   await navigator.clipboard.writeText(JSON.stringify(events, null, 2));
@@ -200,10 +312,15 @@ $('#copyLogs').addEventListener('click', async () => {
   setTimeout(() => $('#copyLogs').textContent = 'Copy JSON', 1200);
 });
 
-// --- Init ---------------------------------------------------------------
+// ----- Init + auto-refresh -----
 
 (async function init() {
   await paintStatus();
   await paintSettings();
   await paintSelectors();
+  refreshTimer = setInterval(paintStatus, REFRESH_MS);
 })();
+
+window.addEventListener('unload', () => {
+  if (refreshTimer) clearInterval(refreshTimer);
+});
