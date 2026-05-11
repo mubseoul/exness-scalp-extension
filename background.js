@@ -543,11 +543,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             kind: 'breakout',
             message: `TEST signal: ${side.toUpperCase()} @ ${pending.entry} (forced, no real edge — verifying pipeline)`,
           });
-          if (s.confirmEachTrade) {
-            await sendToContent(tab.id, { type: 'CONFIRM', pending });
-          } else {
-            await executePending(tab.id, pending);
-          }
+          // Test trade always bypasses confirmation — we want to see the
+          // place→close result NOW, not wait on a click that confuses the
+          // diagnostic. If placement fails the AI feed will say exactly why.
+          await executePending(tab.id, pending);
           sendResponse({ ok: true });
           return;
         }
@@ -611,6 +610,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             tookMs: msg.tookMs,
             error: msg.error,
             bodyPreview: msg.bodyPreview,
+            requestBody: msg.requestBody,
           });
           // Parse the account info response to determine demo vs live.
           // URL pattern: .../rtapi/mt5/{trial}/v1/accounts/{id}  (no trailing /balance etc.)

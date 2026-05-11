@@ -47,6 +47,7 @@
         bodyLen: p.bodyLen,
         tookMs: p.tookMs,
         error: p.error,
+        requestBody: p.requestBody,
       }).catch(() => {});
       return;
     }

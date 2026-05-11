@@ -178,6 +178,17 @@
       window.__exscalpAuthHeader = auth;
     }
 
+    // Capture POST/PUT request bodies for endpoints we care about (orders,
+    // positions). Lets us learn the order-placement payload shape so we
+    // can replace fragile DOM-clicking with real API calls.
+    let reqBody = null;
+    if ((method === 'POST' || method === 'PUT') && /\/orders|\/positions/i.test(url)) {
+      try {
+        const b = init?.body;
+        if (typeof b === 'string') reqBody = b.slice(0, 600);
+      } catch {}
+    }
+
     const t0 = Date.now();
     return origFetch.apply(this, arguments).then(async (resp) => {
       try {
@@ -194,6 +205,7 @@
           authPresent: !!auth,
           authScheme: auth ? auth.split(' ')[0] : null,
           authLen: auth ? auth.length : 0,
+          requestBody: reqBody,
         });
       } catch {}
       return resp;
