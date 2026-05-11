@@ -69,8 +69,17 @@ async function paintStatus() {
   const exnessTab = await findExnessTab();
   setChannel('Exness', exnessTab ? 'active' : 'danger', exnessTab ? new URL(exnessTab.url).host : 'no tab open');
 
-  const lastBarFresh = st.lastBarTs && (Date.now() - st.lastBarTs) < 5 * 60 * 1000;
-  setChannel('Yahoo', lastBarFresh ? 'active' : 'warn', lastBarFresh ? `bar ${ago(st.lastBarTs)}` : 'no data');
+  // "Fresh" means: we fetched successfully in the last 2 minutes. The bar's
+  // own timestamp may lag Yahoo's free-tier FX feed by 15min, but that's
+  // about Yahoo's data lag, not whether our extension is alive.
+  const fetchedRecently = st.lastFetchOkTs && (Date.now() - st.lastFetchOkTs) < 2 * 60 * 1000;
+  const src = st.lastFetchSource ? ` (${st.lastFetchSource})` : '';
+  const detail = !st.lastFetchOkTs
+    ? 'no fetches yet'
+    : fetchedRecently
+      ? `${st.cycleCount || 0} cycles${src}`
+      : `last fetch ${ago(st.lastFetchOkTs)}`;
+  setChannel('Yahoo', fetchedRecently ? 'active' : 'warn', detail);
 
   const claudeOk = st.lastClaudeOkTs;
   const claudeFresh = claudeOk && (Date.now() - claudeOk) < 30 * 60 * 1000;

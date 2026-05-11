@@ -126,7 +126,14 @@ async function runCycle() {
     return;
   }
   const lastBar = bundle.bars[bundle.bars.length - 1];
-  await updateState({ lastBarTs: lastBar.t, lastBar });
+  const cur = await getSettings();
+  await updateState({
+    lastBarTs: lastBar.t,
+    lastBar,
+    lastFetchOkTs: Date.now(),
+    lastFetchSource: bundle.source || bundle.symbol,
+    cycleCount: (cur.state.cycleCount || 0) + 1,
+  });
 
   // 2) Signal
   const { signal, reason } = detectBreakout(bundle.bars, s.signal);
