@@ -73,11 +73,12 @@ async function paintStatus() {
   // own timestamp may lag Yahoo's free-tier FX feed by 15min, but that's
   // about Yahoo's data lag, not whether our extension is alive.
   const fetchedRecently = st.lastFetchOkTs && (Date.now() - st.lastFetchOkTs) < 2 * 60 * 1000;
-  const src = st.lastFetchSource ? ` (${st.lastFetchSource})` : '';
+  const src = st.lastFetchSource || 'unknown';
+  const isLive = src === 'exness-ws';
   const detail = !st.lastFetchOkTs
     ? 'no fetches yet'
     : fetchedRecently
-      ? `${st.cycleCount || 0} cycles${src}`
+      ? (isLive ? `live ticks • ${st.cycleCount || 0} cycles` : `${src} • ${st.cycleCount || 0} cycles`)
       : `last fetch ${ago(st.lastFetchOkTs)}`;
   setChannel('Yahoo', fetchedRecently ? 'active' : 'warn', detail);
 

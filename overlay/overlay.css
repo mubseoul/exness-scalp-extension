@@ -129,6 +129,120 @@
 #exscalp-overlay.collapsed .body,
 #exscalp-overlay.collapsed .footer { display: none; }
 
+/* ===== AI commentary feed (left-top of page) ===== */
+
+#exscalp-ai-feed {
+  position: fixed;
+  top: 16px;
+  left: 16px;
+  z-index: 2147483646;
+  width: 300px;
+  max-height: 380px;
+  background: var(--exs-bg);
+  color: var(--exs-fg);
+  border: 1px solid var(--exs-border);
+  border-radius: 10px;
+  font: 12px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  box-shadow: 0 10px 28px rgba(0,0,0,0.45);
+  user-select: none;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#exscalp-ai-feed header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--exs-border);
+  background: var(--exs-bg-2);
+  cursor: move;
+}
+
+#exscalp-ai-feed header .title {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+#exscalp-ai-feed header .title::before {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--exs-accent);
+  animation: exs-pulse 2s ease-in-out infinite;
+}
+@keyframes exs-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(94, 168, 255, 0.5); }
+  50%      { box-shadow: 0 0 0 6px rgba(94, 168, 255, 0); }
+}
+
+#exscalp-ai-feed .collapse {
+  background: transparent;
+  border: none;
+  color: var(--exs-fg-dim);
+  cursor: pointer;
+  padding: 0 4px;
+  font-size: 14px;
+  line-height: 1;
+}
+
+#exscalp-ai-feed .feed-body {
+  padding: 8px 10px;
+  overflow-y: auto;
+  flex: 1;
+  font-size: 11px;
+}
+
+#exscalp-ai-feed.collapsed .feed-body { display: none; }
+#exscalp-ai-feed.collapsed { max-height: none; }
+
+#exscalp-ai-feed .feed-item {
+  border-left: 3px solid var(--exs-border);
+  padding: 4px 8px;
+  margin-bottom: 4px;
+  background: rgba(255,255,255,0.02);
+  border-radius: 0 4px 4px 0;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+#exscalp-ai-feed .feed-item .when {
+  color: var(--exs-fg-dim);
+  font-variant-numeric: tabular-nums;
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+#exscalp-ai-feed .feed-item .msg {
+  color: var(--exs-fg);
+  flex: 1;
+  line-height: 1.4;
+}
+
+#exscalp-ai-feed .feed-item.scanning { border-left-color: var(--exs-fg-dim); }
+#exscalp-ai-feed .feed-item.waiting  { border-left-color: var(--exs-warn); }
+#exscalp-ai-feed .feed-item.breakout { border-left-color: var(--exs-accent); }
+#exscalp-ai-feed .feed-item.asking   { border-left-color: var(--exs-accent); }
+#exscalp-ai-feed .feed-item.claude_go   { border-left-color: var(--exs-long); }
+#exscalp-ai-feed .feed-item.claude_skip { border-left-color: var(--exs-warn); }
+#exscalp-ai-feed .feed-item.blocked  { border-left-color: var(--exs-short); }
+#exscalp-ai-feed .feed-item.placed   { border-left-color: var(--exs-long); }
+#exscalp-ai-feed .feed-item.failed,
+#exscalp-ai-feed .feed-item.errored  { border-left-color: var(--exs-short); }
+
+#exscalp-ai-feed .empty {
+  color: var(--exs-fg-dim);
+  text-align: center;
+  padding: 16px 8px;
+  font-size: 11px;
+}
+
 #exscalp-overlay .collapse {
   background: transparent;
   border: none;

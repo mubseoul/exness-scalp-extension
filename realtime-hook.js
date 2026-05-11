@@ -1,33 +1,30 @@
 (() => {
   // Runs in MAIN world at document_start, BEFORE Exness's bundle creates its
-  // WebSocket. We monkey-patch window.WebSocket so we can observe (and later
-  // forward) the live tick stream that the chart uses.
+  // WebSocket. We monkey-patch window.WebSocket so we can observe (and now
+  // also parse) the live XAUUSDr tick stream that the chart uses.
   //
-  // Two things to know:
-  //   1. Exness's terminal opens its WS very early. If our content script is
-  //      late, we miss it. document_start + MAIN world is the only way.
-  //   2. Tick messages may be JSON or binary (msgpack/protobuf). We sample
-  //      both as base64 for the user to dump and send to us, then we write
-  //      a real parser based on what we observe.
+  // Tick format (confirmed v0.5 reconnaissance):
+  //   {"i":"XAUUSDr","t":1778472043630,"b":4679.033,"a":4679.147}
+  //   i = instrument, t = epoch ms, b = bid, a = ask
   //
-  // The hook does NOT touch the page's normal data flow — we only attach
-  // passive listeners to each created socket.
+  // Two URLs to watch:
+  //   wss://rtapi-dx.exweb.mobi/.../v2/ws/ticks/accounts/{id}   ← tick stream
+  //   wss://rtapi-dx.exweb.mobi/.../v1/ws/events/accounts/{id}  ← positions/orders/deals
+  //
+  // The hook is passive — we attach listeners only, never alter outgoing
+  // messages or block the page's normal flow.
 
   if (window.__exscalpRealtimeHooked) return;
   window.__exscalpRealtimeHooked = true;
 
   const POST_TYPE = 'exscalp:rt';
-  const TARGET_HOST_HINTS = [
-    'exweb.mobi',
-    'exness.global',
-    'exness.com',
-    'tradingview.com',
-  ];
+  const TARGET_INSTRUMENT = 'XAUUSDr';
+  const TARGET_HOST_HINTS = ['exweb.mobi', 'exness.global', 'exness.com', 'tradingview.com'];
 
-  // Bounded ring of recent samples so users can dump them via the popup.
-  // Bounded so a chatty 50-tick/s feed doesn't blow out memory.
+  // Diagnostic sample ring — keeps last 60 frames for the popup dump.
   const SAMPLES = [];
   const SAMPLE_CAP = 60;
+  window.__exscalpSamples = SAMPLES;
 
   function isInteresting(url) {
     try {
@@ -36,52 +33,37 @@
     } catch { return false; }
   }
 
-  // Best-effort classification of the message payload so we can spot
-  // price-bearing messages quickly. Real parsing happens in phase 2.
-  function classify(data) {
+  // Fast-path: detect XAUUSDr tick without full JSON.parse cost.
+  // All ticks start with `{"i":"XAUUSDr",` per the captured samples.
+  function tryParseXauTick(data) {
+    if (typeof data !== 'string') return null;
+    if (data.length < 40 || data.length > 200) return null;
+    if (data.charCodeAt(0) !== 123) return null; // '{'
+    if (!data.startsWith('{"i":"' + TARGET_INSTRUMENT + '"')) return null;
+    try {
+      const j = JSON.parse(data);
+      if (typeof j.b !== 'number' || typeof j.a !== 'number') return null;
+      return { t: j.t || Date.now(), b: j.b, a: j.a };
+    } catch { return null; }
+  }
+
+  function classifyForDiag(data) {
     if (data == null) return { kind: 'empty' };
     if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
       return { kind: 'binary', byteLen: data.byteLength ?? data.length };
     }
     if (typeof data === 'string') {
-      const has = (re) => re.test(data);
-      const looksPrice =
-        has(/"bid"\s*:/i)  ||
-        has(/"ask"\s*:/i)  ||
-        has(/"last"\s*:/i) ||
-        has(/"price"\s*:/i)||
-        has(/XAU(USD)?[a-z]?/i);
-      return {
-        kind: looksPrice ? 'price_candidate' : (data[0] === '{' || data[0] === '[' ? 'json_other' : 'string_other'),
-        len: data.length,
-      };
+      const looksPrice = /"(bid|ask|last|price|i)"\s*:/i.test(data);
+      return { kind: looksPrice ? 'price_candidate' : 'json_other', len: data.length };
     }
     return { kind: 'other' };
   }
 
-  function bytesToBase64(view) {
-    // Truncate to 400 bytes — enough for protocol fingerprinting.
-    const buf = view instanceof ArrayBuffer ? new Uint8Array(view) : new Uint8Array(view.buffer || view);
-    const slice = buf.subarray(0, 400);
-    let s = '';
-    for (let i = 0; i < slice.length; i++) s += String.fromCharCode(slice[i]);
-    try { return btoa(s); } catch { return null; }
-  }
-
-  function sample(direction, url, data, info) {
+  function pushSample(direction, url, data, info) {
     if (SAMPLES.length >= SAMPLE_CAP) return;
     let preview = null;
     if (typeof data === 'string') preview = data.slice(0, 500);
-    else if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) preview = bytesToBase64(data);
-    SAMPLES.push({
-      ts: Date.now(),
-      direction,           // 'recv' | 'send' | 'meta'
-      url: String(url),
-      ...info,
-      preview,
-    });
-    // Expose for popup-side dump
-    window.__exscalpSamples = SAMPLES;
+    SAMPLES.push({ ts: Date.now(), direction, url: String(url), ...info, preview });
   }
 
   function forward(payload) {
@@ -94,26 +76,27 @@
     try {
       if (isInteresting(url)) {
         forward({ stage: 'connecting', url: String(url) });
-        sample('meta', url, null, { stage: 'connecting' });
+        pushSample('meta', url, null, { stage: 'connecting' });
 
-        ws.addEventListener('open',  () => { forward({ stage: 'open', url }); sample('meta', url, null, { stage: 'open' }); });
-        ws.addEventListener('close', (e) => { forward({ stage: 'close', url, code: e.code, reason: e.reason }); sample('meta', url, null, { stage: 'close', code: e.code }); });
-        ws.addEventListener('error', ()  => { forward({ stage: 'error', url }); sample('meta', url, null, { stage: 'error' }); });
+        ws.addEventListener('open',  () => { forward({ stage: 'open', url }); pushSample('meta', url, null, { stage: 'open' }); });
+        ws.addEventListener('close', (e) => { forward({ stage: 'close', url, code: e.code, reason: e.reason }); pushSample('meta', url, null, { stage: 'close', code: e.code }); });
+        ws.addEventListener('error', ()  => { forward({ stage: 'error', url }); pushSample('meta', url, null, { stage: 'error' }); });
 
         ws.addEventListener('message', (event) => {
-          const cls = classify(event.data);
-          sample('recv', url, event.data, cls);
-          // We only forward price-candidate messages to the bridge so the
-          // trace stays useful; the rest is kept in __exscalpSamples for dump.
-          if (cls.kind === 'price_candidate') {
-            forward({ stage: 'message', url, ...cls, preview: typeof event.data === 'string' ? event.data.slice(0, 500) : null });
+          // Hot path: XAUUSDr tick — parse and forward immediately, NO sample.
+          const tick = tryParseXauTick(event.data);
+          if (tick) {
+            forward({ stage: 'tick', t: tick.t, b: tick.b, a: tick.a });
+            return;
           }
+          // Cold path: diagnostic sample for everything else.
+          const cls = classifyForDiag(event.data);
+          pushSample('recv', url, event.data, cls);
         });
 
-        // Wrap send so we can see subscription frames the page issues.
         const origSend = ws.send.bind(ws);
         ws.send = function (data) {
-          try { sample('send', url, data, classify(data)); } catch {}
+          try { pushSample('send', url, data, classifyForDiag(data)); } catch {}
           return origSend(data);
         };
       }
@@ -129,5 +112,5 @@
   PatchedWebSocket.CLOSED     = NativeWebSocket.CLOSED;
 
   window.WebSocket = PatchedWebSocket;
-  console.info('[ExScalp hook] WebSocket patched at document_start');
+  console.info('[ExScalp hook] WebSocket patched at document_start (tick parser active)');
 })();

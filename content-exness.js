@@ -18,7 +18,9 @@
   const SETTINGS_KEY = 'exscalp_v1';
   const overlay = createOverlay();
   document.documentElement.appendChild(overlay.root);
-  console.info('[ExScalp] overlay mounted, top-right of page');
+  const aiFeed = createAIFeed();
+  document.documentElement.appendChild(aiFeed.root);
+  console.info('[ExScalp] overlay mounted (right) + AI feed (left)');
 
   let settings = null;
   let pending = null;
@@ -128,6 +130,10 @@
             return;
           case 'BLOCKED':
             overlay.showBlocked(msg.verdict, msg.signal);
+            sendResponse({ ok: true });
+            return;
+          case 'AI_FEED':
+            aiFeed.add(msg.entry);
             sendResponse({ ok: true });
             return;
           case 'CONFIRM':
@@ -256,6 +262,78 @@
     } catch (e) {
       return { ok: false, reason: 'dom_failure', error: e.message };
     }
+  }
+
+  // --- AI feed (left-top floating panel) -----------------------------------
+
+  function createAIFeed() {
+    const root = document.createElement('div');
+    root.id = 'exscalp-ai-feed';
+    root.innerHTML = `
+      <header>
+        <div class="title">Claude • Scalp AI</div>
+        <button class="collapse" title="Collapse">–</button>
+      </header>
+      <div class="feed-body">
+        <div class="empty">Waiting for first cycle…</div>
+      </div>
+    `;
+    const body = root.querySelector('.feed-body');
+    const collapseBtn = root.querySelector('.collapse');
+    const items = [];
+    const MAX_ITEMS = 25;
+
+    collapseBtn.addEventListener('click', () => {
+      root.classList.toggle('collapsed');
+      collapseBtn.textContent = root.classList.contains('collapsed') ? '+' : '–';
+    });
+
+    // Drag-to-move
+    const header = root.querySelector('header');
+    let dragging = false, dx = 0, dy = 0;
+    header.addEventListener('mousedown', (e) => {
+      if (e.target === collapseBtn) return;
+      dragging = true;
+      const r = root.getBoundingClientRect();
+      dx = e.clientX - r.left;
+      dy = e.clientY - r.top;
+      e.preventDefault();
+    });
+    window.addEventListener('mousemove', (e) => {
+      if (!dragging) return;
+      root.style.left = (e.clientX - dx) + 'px';
+      root.style.top  = (e.clientY - dy) + 'px';
+    });
+    window.addEventListener('mouseup', () => { dragging = false; });
+
+    function add(entry) {
+      if (!entry) return;
+      // Suppress duplicate consecutive scanning lines to keep the feed legible
+      const last = items[items.length - 1];
+      if (last && last.kind === entry.kind && last.message === entry.message) return;
+      items.push(entry);
+      if (items.length > MAX_ITEMS) items.shift();
+      render();
+    }
+
+    function render() {
+      if (!items.length) {
+        body.innerHTML = '<div class="empty">Waiting for first cycle…</div>';
+        return;
+      }
+      body.innerHTML = '';
+      for (const e of items) {
+        const d = document.createElement('div');
+        d.className = `feed-item ${e.kind || ''}`;
+        const t = new Date(e.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        d.innerHTML = `<span class="when">${t}</span><span class="msg"></span>`;
+        d.querySelector('.msg').textContent = e.message;
+        body.appendChild(d);
+      }
+      body.scrollTop = body.scrollHeight;
+    }
+
+    return { root, add };
   }
 
   // --- Overlay (DOM construction) ------------------------------------------

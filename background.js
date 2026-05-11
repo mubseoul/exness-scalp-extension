@@ -9,11 +9,12 @@
 
 import { getSettings, pushHistory, updateState, saveSettings } from './lib/storage.js';
 import { trace, traceError } from './lib/trace.js';
-import { fetchBarsWithFallback, crossCheck } from './lib/price-feed.js';
+import { fetchBarsWithFallback } from './lib/price-feed.js';
 import { detectBreakout } from './lib/signal-engine.js';
 import { vetoOrApprove } from './lib/claude-trade.js';
 import { assess, recordSignalAccepted, detectAccountType } from './lib/risk-manager.js';
 import { LIVE_UNLOCK_PHRASE, DEFAULTS } from './lib/defaults.js';
+import { addTicks, buildBars, getTickStats, getLatestTick } from './lib/tick-store.js';
 
 const ALARM_NAME = 'exscalp_poll';
 
@@ -92,6 +93,26 @@ async function sendToContent(tabId, msg) {
   }
 }
 
+async function broadcastCommentary(tabId, entry) {
+  return sendToContent(tabId, { type: 'AI_FEED', entry: { ...entry, at: Date.now() } });
+}
+
+function prettyNoSignal(reason, bars, s) {
+  const last = bars.at(-1);
+  switch (reason) {
+    case 'out_of_session':
+      return `Outside London/NY hours (UTC ${new Date().getUTCHours()}). Toggle 24/7 in Settings to override.`;
+    case 'low_atr':
+      return `Range too tight — ATR < $${s.signal.minAtrUsd}. Waiting for volatility.`;
+    case 'no_break':
+      return `Scanning… price ${last?.c?.toFixed(2)} inside ${s.signal.rangeMinutes}-min range. No breakout.`;
+    case 'insufficient_bars':
+      return `Building bar history from live ticks.`;
+    default:
+      return reason;
+  }
+}
+
 async function runCycle() {
   const s = await getSettings();
   if (!s.enabled || s.paused) return;
@@ -108,71 +129,130 @@ async function runCycle() {
     return;
   }
 
-  // 1) Bars
-  let bundle;
+  // 1) Bars — prefer live Exness ticks aggregated into 1m bars; fall back to
+  // Yahoo only if we don't have enough ticks buffered yet (cold start).
+  const minBarsNeeded = s.signal.rangeMinutes + 20;
+  let bars = [];
+  let source = null;
   try {
-    bundle = await fetchBarsWithFallback(
-      s.signal.instrument,
-      s.signal.fallbackInstrument,
-      s.signal.interval,
-      Math.max(s.signal.rangeMinutes + 30, 60),
-    );
+    bars = await buildBars(Math.max(s.signal.rangeMinutes + 30, 45));
+    if (bars.length >= minBarsNeeded) {
+      source = 'exness-ws';
+    } else {
+      // Not enough ticks yet. Try Yahoo as bootstrap.
+      trace('cycle', 'tick_history_thin', { count: bars.length, needed: minBarsNeeded });
+      try {
+        const bundle = await fetchBarsWithFallback(
+          s.signal.instrument,
+          s.signal.fallbackInstrument,
+          s.signal.interval,
+          Math.max(s.signal.rangeMinutes + 30, 60),
+        );
+        if (bundle?.bars?.length >= minBarsNeeded) {
+          bars = bundle.bars;
+          source = bundle.source || bundle.symbol;
+        }
+      } catch (e) {
+        // Yahoo has been 404'ing — accepted failure.
+        traceError('cycle', 'yahoo_fallback_failed', e);
+      }
+    }
   } catch (e) {
-    traceError('cycle', 'bars_fetch_failed', e);
+    traceError('cycle', 'bars_build_failed', e);
     return;
   }
-  if (!bundle.bars.length) {
-    trace('cycle', 'no_bars', {});
+  if (!bars.length) {
+    const tickStats = await getTickStats();
+    trace('cycle', 'no_bars', { tickStats });
+    await broadcastCommentary(tab.id, {
+      kind: 'waiting',
+      message: `Waiting for tick history — ${tickStats.count} ticks buffered (${tickStats.spanMin}min), need ~${minBarsNeeded}min.`,
+    });
     return;
   }
-  const lastBar = bundle.bars[bundle.bars.length - 1];
+  if (bars.length < minBarsNeeded) {
+    await broadcastCommentary(tab.id, {
+      kind: 'waiting',
+      message: `Insufficient bars (${bars.length} of ${minBarsNeeded}). Building from Exness ticks…`,
+    });
+    return;
+  }
+  const lastBar = bars[bars.length - 1];
   const cur = await getSettings();
   await updateState({
     lastBarTs: lastBar.t,
     lastBar,
     lastFetchOkTs: Date.now(),
-    lastFetchSource: bundle.source || bundle.symbol,
+    lastFetchSource: source,
     cycleCount: (cur.state.cycleCount || 0) + 1,
   });
 
   // 2) Signal
-  const { signal, reason } = detectBreakout(bundle.bars, s.signal);
+  const { signal, reason } = detectBreakout(bars, s.signal);
   if (!signal) {
     trace('cycle', 'no_signal', { reason });
-    await sendToContent(tab.id, { type: 'TICK', reason, lastBar: bundle.bars.at(-1) });
+    await sendToContent(tab.id, { type: 'TICK', reason, lastBar });
+    await broadcastCommentary(tab.id, {
+      kind: 'scanning',
+      message: prettyNoSignal(reason, bars, s),
+    });
     return;
   }
   await updateState({ lastAtr: signal.atr });
   trace('cycle', 'signal_detected', { side: signal.side, entry: signal.entry, atr: signal.atr });
+  await broadcastCommentary(tab.id, {
+    kind: 'breakout',
+    message: `Breakout detected: ${signal.side.toUpperCase()} @ ${signal.entry} • range ${signal.range.low}-${signal.range.high}, ATR $${signal.atr.toFixed(2)}`,
+  });
 
   // 3) Risk gate
   const verdict = await assess();
   if (!verdict.allow) {
     trace('cycle', 'risk_blocked', verdict);
     await sendToContent(tab.id, { type: 'BLOCKED', verdict, signal });
+    await broadcastCommentary(tab.id, {
+      kind: 'blocked',
+      message: `Risk gate blocked: ${verdict.reason}`,
+    });
     return;
   }
 
-  // 4) Cross-check with Exness DOM price (content script holds it).
-  // Threshold of $5 absorbs GC=F basis if we fell back to futures; for spot
-  // XAUUSD=X the typical delta is < $0.50.
-  const pageState = await sendToContent(tab.id, { type: 'GET_PAGE_PRICE' });
-  const exnessMid = pageState?.mid;
-  const xcheck = crossCheck(signal.entry, exnessMid, 5.0);
-  if (!xcheck.ok) {
-    trace('cycle', 'cross_check_failed', { xcheck, exnessMid, yahoo: signal.entry });
-    await sendToContent(tab.id, { type: 'BLOCKED', verdict: { allow: false, reason: 'price_diverged', ...xcheck }, signal });
-    return;
+  // 4) Cross-check (only meaningful when bars came from Yahoo; if bars came
+  // from the Exness WS feed we ARE the source of truth, skip).
+  if (source !== 'exness-ws') {
+    const pageState = await sendToContent(tab.id, { type: 'GET_PAGE_PRICE' });
+    const exnessMid = pageState?.mid;
+    if (exnessMid && Math.abs(signal.entry - exnessMid) > 5.0) {
+      trace('cycle', 'cross_check_failed', { exnessMid, yahoo: signal.entry });
+      await sendToContent(tab.id, { type: 'BLOCKED', verdict: { allow: false, reason: 'price_diverged' }, signal });
+      await broadcastCommentary(tab.id, {
+        kind: 'blocked',
+        message: `Price diverged from Exness DOM ($${Math.abs(signal.entry - exnessMid).toFixed(2)}). Skipping.`,
+      });
+      return;
+    }
   }
 
   // 5) Claude veto (optional)
   let claudeVerdict = { verdict: 'go', confidence: 100, reason: 'veto_disabled' };
   if (s.claude.enabled) {
-    claudeVerdict = await vetoOrApprove(signal, bundle.bars, {
+    await broadcastCommentary(tab.id, {
+      kind: 'asking',
+      message: 'Asking Claude to confirm or veto…',
+    });
+    claudeVerdict = await vetoOrApprove(signal, bars, {
       model: s.claude.model,
       timeoutSec: s.claude.timeoutSec,
     });
-    await updateState({ lastClaudeMs: claudeVerdict.tookMs, lastClaudeOkTs: claudeVerdict.confidence > 0 ? Date.now() : (await getSettings()).state.lastClaudeOkTs });
+    await updateState({
+      lastClaudeMs: claudeVerdict.tookMs,
+      lastClaudeOkTs: claudeVerdict.confidence > 0 ? Date.now() : (await getSettings()).state.lastClaudeOkTs,
+      lastClaudeVerdict: claudeVerdict,
+    });
+    await broadcastCommentary(tab.id, {
+      kind: claudeVerdict.verdict === 'go' ? 'claude_go' : 'claude_skip',
+      message: `Claude: ${claudeVerdict.verdict.toUpperCase()} (${claudeVerdict.confidence}%) — ${claudeVerdict.reason}`,
+    });
     if (claudeVerdict.verdict !== 'go' || claudeVerdict.confidence < s.claude.minConfidence) {
       trace('cycle', 'claude_skipped', { signal, claudeVerdict });
       await sendToContent(tab.id, { type: 'BLOCKED', verdict: { allow: false, reason: 'claude_skip', ...claudeVerdict }, signal });
@@ -311,10 +391,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           return;
         }
         case 'RT_TICK': {
-          // Throttled price-candidate message sample. In phase 2 we'll parse
-          // these into OHLC bars; for now we just trace samples so the user
-          // can paste them back to me.
+          // Legacy single-tick path from v0.5. Treat as a 1-tick batch.
           trace('rt', 'tick_sample', { url: msg.url, kind: msg.kind, len: msg.len, preview: msg.preview });
+          sendResponse({ ok: true });
+          return;
+        }
+        case 'RT_TICK_BATCH': {
+          await addTicks(msg.ticks || []);
           sendResponse({ ok: true });
           return;
         }

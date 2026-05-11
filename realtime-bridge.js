@@ -4,15 +4,25 @@
   // service worker.
   //
   // Why two scripts: chrome.runtime is unavailable from MAIN world, and
-  // window.WebSocket can't be patched from ISOLATED world. So we patch in
-  // MAIN, forward via postMessage, and relay from ISOLATED.
+  // window.WebSocket can't be patched from ISOLATED world.
+  //
+  // Tick batching: Exness pushes XAUUSDr ticks at 3-6/sec. One
+  // chrome.runtime.sendMessage per tick is wasteful. We accumulate ticks
+  // for 500ms and send a single batch.
 
   const POST_TYPE = 'exscalp:rt';
+  const BATCH_MS = 500;
 
-  // We're chatty during reconnaissance — throttle relayed messages to once
-  // per second so we don't flood the trace ring.
-  const RELAY_THROTTLE_MS = 1000;
-  let lastRelay = 0;
+  let tickBatch = [];
+  let flushTimer = null;
+
+  function flushBatch() {
+    flushTimer = null;
+    if (!tickBatch.length) return;
+    const batch = tickBatch;
+    tickBatch = [];
+    chrome.runtime.sendMessage({ type: 'RT_TICK_BATCH', ticks: batch }).catch(() => {});
+  }
 
   window.addEventListener('message', (e) => {
     if (e.source !== window) return;
@@ -20,29 +30,19 @@
     if (!m || m.type !== POST_TYPE || !m.payload) return;
     const p = m.payload;
 
-    // Connection events are infrequent — always relay.
-    if (p.stage !== 'message') {
-      chrome.runtime.sendMessage({
-        type: 'RT_CONN',
-        url: p.url,
-        state: p.stage,
-        code: p.code,
-        reason: p.reason,
-      }).catch(() => {});
+    if (p.stage === 'tick') {
+      tickBatch.push({ t: p.t, b: p.b, a: p.a });
+      if (!flushTimer) flushTimer = setTimeout(flushBatch, BATCH_MS);
       return;
     }
 
-    // Price-candidate messages are frequent — throttle.
-    const now = Date.now();
-    if (now - lastRelay < RELAY_THROTTLE_MS) return;
-    lastRelay = now;
-
+    // Connection lifecycle events — always relayed (low frequency)
     chrome.runtime.sendMessage({
-      type: 'RT_TICK',
+      type: 'RT_CONN',
       url: p.url,
-      kind: p.kind,
-      len: p.len,
-      preview: p.preview,
+      state: p.stage,
+      code: p.code,
+      reason: p.reason,
     }).catch(() => {});
   });
 })();
