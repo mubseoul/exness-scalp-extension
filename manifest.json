@@ -1,0 +1,59 @@
+{
+  "manifest_version": 3,
+  "name": "Exness XAUUSD Scalp Assistant",
+  "version": "0.1.0",
+  "description": "AI-assisted scalp signals on XAUUSD for the Exness web trader. Hybrid breakout detection (deterministic JS) + Claude veto via your claude.ai session. Confirm-per-trade by default.",
+  "permissions": [
+    "storage",
+    "alarms",
+    "tabs",
+    "cookies",
+    "scripting",
+    "notifications"
+  ],
+  "host_permissions": [
+    "https://my.exness.global/*",
+    "https://my.exness.com/*",
+    "https://query1.finance.yahoo.com/*",
+    "https://query2.finance.yahoo.com/*",
+    "https://claude.ai/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://my.exness.global/webtrading/*",
+        "https://my.exness.com/webtrading/*"
+      ],
+      "js": ["content-exness.js"],
+      "css": ["overlay/overlay.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "Exness Scalp Assistant",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["overlay/overlay.css"],
+      "matches": [
+        "https://my.exness.global/*",
+        "https://my.exness.com/*"
+      ]
+    }
+  ]
+}

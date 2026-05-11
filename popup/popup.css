@@ -1,0 +1,204 @@
+:root {
+  --bg: #0f1115;
+  --bg-2: #181b22;
+  --fg: #e6e8ee;
+  --fg-dim: #9aa3b2;
+  --border: #2a2f3a;
+  --primary: #5ea8ff;
+  --long: #16c47f;
+  --short: #ff5c75;
+  --warn: #f3b94b;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  width: 360px;
+  font: 12px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+  margin: 0;
+}
+
+.tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-2);
+}
+
+.tabs button {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--fg-dim);
+  padding: 8px 4px;
+  cursor: pointer;
+  font: inherit;
+  border-bottom: 2px solid transparent;
+}
+
+.tabs button.active {
+  color: var(--fg);
+  border-bottom-color: var(--primary);
+}
+
+.tab { padding: 10px 12px; }
+.tab.hidden { display: none; }
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 6px 0;
+  gap: 8px;
+}
+
+.row .k { color: var(--fg-dim); }
+.row .v { font-variant-numeric: tabular-nums; }
+
+.row input[type=number],
+.row input[type=text] {
+  background: var(--bg-2);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 6px;
+  width: 130px;
+  font: inherit;
+  text-align: right;
+}
+.row input[type=text] { text-align: left; }
+
+.header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 4px 0 10px;
+}
+
+button.full {
+  display: block;
+  width: 100%;
+  padding: 8px;
+  margin: 8px 0 0;
+  background: var(--bg-2);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit;
+}
+button.full:hover { background: #20242d; }
+button.primary { border-color: var(--primary); color: var(--primary); }
+button.danger  { border-color: var(--short); color: var(--short); }
+
+.hr {
+  height: 1px;
+  background: var(--border);
+  margin: 10px 0;
+}
+
+.hint {
+  font-size: 10px;
+  color: var(--fg-dim);
+  margin: 6px 0;
+}
+
+pre {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px;
+  max-height: 320px;
+  overflow: auto;
+  font-size: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.recent .item {
+  border-top: 1px dashed var(--border);
+  padding: 4px 0;
+  font-size: 11px;
+}
+
+/* Switch */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 32px; height: 18px;
+}
+.switch input { opacity: 0; width: 0; height: 0; }
+.switch span {
+  position: absolute; inset: 0;
+  background: #2c313c;
+  border-radius: 18px;
+  transition: 0.15s;
+}
+.switch span::before {
+  content: "";
+  position: absolute;
+  height: 14px; width: 14px;
+  left: 2px; top: 2px;
+  background: #f0f2f5;
+  border-radius: 50%;
+  transition: 0.15s;
+}
+.switch input:checked + span { background: var(--primary); }
+.switch input:checked + span::before { transform: translateX(14px); }
+.switch.sm { width: 28px; height: 16px; }
+.switch.sm span::before { height: 12px; width: 12px; }
+.switch.sm input:checked + span::before { transform: translateX(12px); }
+
+/* Modal */
+.modal {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.6);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 100;
+}
+.modal.hidden { display: none; }
+.modal-inner {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  width: 320px;
+}
+.modal-inner h3 { margin: 0 0 6px; }
+.modal-inner p { color: var(--fg-dim); margin: 6px 0; }
+.modal-inner .phrase {
+  font-weight: bold;
+  color: var(--warn);
+}
+.modal-inner input {
+  width: 100%;
+  background: var(--bg-2);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  padding: 6px;
+  border-radius: 4px;
+  margin: 6px 0;
+  font: inherit;
+}
+.modal-actions {
+  display: flex; justify-content: flex-end; gap: 8px;
+}
+.modal-actions button {
+  padding: 6px 10px;
+  background: var(--bg-2);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  font: inherit;
+}
+.modal-actions .primary { border-color: var(--primary); color: var(--primary); }
+
+h3 {
+  margin: 10px 0 4px;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+}
