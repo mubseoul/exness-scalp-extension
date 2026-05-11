@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Exness XAUUSD Scalp Assistant",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "AI-assisted scalp signals on XAUUSD for the Exness web trader. Hybrid breakout detection (deterministic JS) + Claude veto via your claude.ai session. Confirm-per-trade by default.",
   "permissions": [
     "storage",
@@ -14,6 +14,7 @@
   "host_permissions": [
     "https://my.exness.global/*",
     "https://my.exness.com/*",
+    "https://*.exweb.mobi/*",
     "https://query1.finance.yahoo.com/*",
     "https://query2.finance.yahoo.com/*",
     "https://claude.ai/*"
@@ -23,6 +24,23 @@
     "type": "module"
   },
   "content_scripts": [
+    {
+      "matches": [
+        "https://my.exness.global/webtrading/*",
+        "https://my.exness.com/webtrading/*"
+      ],
+      "js": ["realtime-hook.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://my.exness.global/webtrading/*",
+        "https://my.exness.com/webtrading/*"
+      ],
+      "js": ["realtime-bridge.js"],
+      "run_at": "document_start"
+    },
     {
       "matches": [
         "https://my.exness.global/webtrading/*",

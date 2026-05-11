@@ -304,6 +304,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ ok: true });
           return;
         }
+        case 'RT_CONN': {
+          // WebSocket lifecycle event from realtime-hook
+          trace('rt', `conn_${msg.state || 'unknown'}`, { url: msg.url, code: msg.code, reason: msg.reason });
+          sendResponse({ ok: true });
+          return;
+        }
+        case 'RT_TICK': {
+          // Throttled price-candidate message sample. In phase 2 we'll parse
+          // these into OHLC bars; for now we just trace samples so the user
+          // can paste them back to me.
+          trace('rt', 'tick_sample', { url: msg.url, kind: msg.kind, len: msg.len, preview: msg.preview });
+          sendResponse({ ok: true });
+          return;
+        }
         default:
           sendResponse({ ok: false, reason: 'unknown_message' });
       }
