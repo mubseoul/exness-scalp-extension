@@ -12,10 +12,13 @@
 (() => {
   if (window.__exscalp_loaded) return;
   window.__exscalp_loaded = true;
+  window.__exscalp_version = '0.2.0';
+  console.info('[ExScalp] content script loaded v0.2.0 — overlay mounting');
 
   const SETTINGS_KEY = 'exscalp_v1';
   const overlay = createOverlay();
   document.documentElement.appendChild(overlay.root);
+  console.info('[ExScalp] overlay mounted, top-right of page');
 
   let settings = null;
   let pending = null;
@@ -49,12 +52,30 @@
 
   // --- DOM scraping (price) -------------------------------------------------
 
+  // Selector format:
+  //   "css-selector"          — querySelector, first match
+  //   "[N]:css-selector"      — querySelectorAll, take Nth (0-indexed)
+  // The positional form disambiguates between elements that share a class
+  // (Exness has 3 InputBox inputs all using the same class for lot/SL/TP).
+  function resolveSelector(sel) {
+    if (!sel || typeof sel !== 'string') return null;
+    const m = sel.match(/^\[(\d+)\]:(.+)$/);
+    if (m) {
+      const idx = parseInt(m[1], 10);
+      const list = document.querySelectorAll(m[2]);
+      return list[idx] || null;
+    }
+    return document.querySelector(sel);
+  }
+
   function scrapePrice() {
     const sel = settings?.exness?.selectors;
     if (!sel?.bidPrice || !sel?.askPrice) return null;
     try {
-      const bidEl = document.querySelector(sel.bidPrice);
-      const askEl = document.querySelector(sel.askPrice);
+      const bidEl = resolveSelector(sel.bidPrice);
+      const askEl = resolveSelector(sel.askPrice);
+      // Exness puts the price in the same node as the side label, e.g.
+      // "Sell4,684.758" — strip non-numeric chars before parsing.
       const bid = parseFloat((bidEl?.textContent || '').replace(/[^\d.\-]/g, ''));
       const ask = parseFloat((askEl?.textContent || '').replace(/[^\d.\-]/g, ''));
       if (!Number.isFinite(bid) || !Number.isFinite(ask)) return null;
@@ -195,23 +216,23 @@
     }
 
     try {
-      const lotEl = await waitFor(() => document.querySelector(sel.lotInput));
+      const lotEl = await waitFor(() => resolveSelector(sel.lotInput));
       setInputValue(lotEl, p.lot);
 
-      const slEl = await waitFor(() => document.querySelector(sel.slInput));
+      const slEl = await waitFor(() => resolveSelector(sel.slInput));
       setInputValue(slEl, p.sl);
 
-      const tpEl = await waitFor(() => document.querySelector(sel.tpInput));
+      const tpEl = await waitFor(() => resolveSelector(sel.tpInput));
       setInputValue(tpEl, p.tp);
 
-      const buttonSel = p.side === 'long' ? sel.buyButton : sel.sellButton;
-      const btn = await waitFor(() => document.querySelector(buttonSel));
+      const buttonSelector = p.side === 'long' ? sel.buyButton : sel.sellButton;
+      const btn = await waitFor(() => resolveSelector(buttonSelector));
       btn.click();
 
       // Some Exness flows show a confirm dialog
       if (sel.confirmButton) {
         try {
-          const cbtn = await waitFor(() => document.querySelector(sel.confirmButton), 1500);
+          const cbtn = await waitFor(() => resolveSelector(sel.confirmButton), 1500);
           cbtn.click();
         } catch { /* no confirm dialog -- order may have placed directly */ }
       }

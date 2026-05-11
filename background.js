@@ -7,25 +7,52 @@
 //  - The content script runs only when an Exness tab is open; the SW runs
 //    whenever the extension is installed.
 
-import { getSettings, pushHistory, updateState } from './lib/storage.js';
+import { getSettings, pushHistory, updateState, saveSettings } from './lib/storage.js';
 import { trace, traceError } from './lib/trace.js';
 import { fetchBarsWithFallback, crossCheck } from './lib/price-feed.js';
 import { detectBreakout } from './lib/signal-engine.js';
 import { vetoOrApprove } from './lib/claude-trade.js';
 import { assess, recordSignalAccepted, detectAccountType } from './lib/risk-manager.js';
-import { LIVE_UNLOCK_PHRASE } from './lib/defaults.js';
+import { LIVE_UNLOCK_PHRASE, DEFAULTS } from './lib/defaults.js';
 
 const ALARM_NAME = 'exscalp_poll';
 
 chrome.runtime.onInstalled.addListener(async () => {
+  await migrateSelectorsIfNeeded();
   await ensureAlarm();
   trace('lifecycle', 'installed', { version: chrome.runtime.getManifest().version });
 });
 
 chrome.runtime.onStartup.addListener(async () => {
+  await migrateSelectorsIfNeeded();
   await ensureAlarm();
   trace('lifecycle', 'startup', {});
 });
+
+// deepMerge preserves stored user values over new defaults. v0.1 stored
+// nulls for every selector, so the v0.2 defaults wouldn't take effect on
+// upgrade. Backfill any null selector from defaults — but ONLY if the user
+// has never run calibration (calibratedAt = null).
+async function migrateSelectorsIfNeeded() {
+  const s = await getSettings();
+  if (s.exness.calibratedAt) return;
+  const cur = s.exness.selectors || {};
+  const def = DEFAULTS.exness.selectors;
+  const patched = {};
+  let changed = false;
+  for (const k of Object.keys(def)) {
+    if (cur[k] == null && def[k] != null) {
+      patched[k] = def[k];
+      changed = true;
+    } else {
+      patched[k] = cur[k];
+    }
+  }
+  if (changed) {
+    await saveSettings({ exness: { selectors: patched } });
+    trace('lifecycle', 'selectors_backfilled', { keys: Object.keys(patched).filter(k => cur[k] == null && def[k] != null) });
+  }
+}
 
 async function ensureAlarm() {
   const s = await getSettings();
