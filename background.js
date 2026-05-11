@@ -17,6 +17,7 @@ import { assess, recordSignalAccepted, detectAccountType, classifyAccountFromApi
 import { LIVE_UNLOCK_PHRASE, DEFAULTS } from './lib/defaults.js';
 import { addTicks, buildBars, getTickStats, getLatestTick } from './lib/tick-store.js';
 import { fetchExnessCandles, barsToSyntheticTicks } from './lib/exness-history.js';
+import { placeMarketOrder } from './lib/exness-orders.js';
 
 const ALARM_NAME = 'exscalp_poll';
 
@@ -424,13 +425,36 @@ async function executePending(tabId, pending) {
     message: `Placing order: ${pending.side.toUpperCase()} ${pending.lot} lot @ ${pending.entry} • SL ${pending.sl} / TP ${pending.tp}`,
   });
   try {
-    const res = await sendToContent(tabId, { type: 'EXECUTE', pending });
+    // Prefer direct REST API — bypasses DOM click fragility.
+    const s = await getSettings();
+    const accountId = s.state.exnessAccountId;
+    let res;
+    if (accountId) {
+      const api = await placeMarketOrder({
+        tabId, accountId,
+        instrument: 'XAUUSDr',
+        side: pending.side,
+        volume: pending.lot,
+        stopLoss: pending.sl,
+        takeProfit: pending.tp,
+      });
+      if (api.ok) {
+        res = { ok: true, via: 'api', api };
+      } else {
+        trace('exec', 'api_failed_falling_back_to_dom', { reason: api.reason, error: api.error });
+        res = await sendToContent(tabId, { type: 'EXECUTE', pending });
+        if (res?.ok) res.via = 'dom';
+      }
+    } else {
+      res = await sendToContent(tabId, { type: 'EXECUTE', pending });
+      if (res?.ok) res.via = 'dom';
+    }
     if (res?.ok) {
       await pushHistory({ kind: 'placed', pending, exec: res });
       trace('exec', 'placed', { id: pending.id, exec: res });
       await broadcastCommentary(tabId, {
         kind: 'placed',
-        message: `Order placed ${pending.side.toUpperCase()} ${pending.lot} lot @ ${pending.entry}. Risking $${(pending.atr).toFixed(2)} to ${pending.side === 'long' ? 'make' : 'make'} $${(pending.atr * 1.5).toFixed(2)} (R:R 1.5).`,
+        message: `Order placed (via ${res.via || '?'}) ${pending.side.toUpperCase()} ${pending.lot} lot @ ${pending.entry}. SL ${pending.sl} / TP ${pending.tp}.`,
       });
       if (await wantNotify('desktopOnFill')) notify('Order placed', `${pending.side} @ ${pending.entry}`);
     } else {
@@ -438,7 +462,7 @@ async function executePending(tabId, pending) {
       trace('exec', 'failed', { id: pending.id, exec: res });
       await broadcastCommentary(tabId, {
         kind: 'failed',
-        message: `Order placement FAILED: ${res?.reason || 'unknown'}${res?.missing ? ' (missing: ' + res.missing.join(', ') + ')' : ''}`,
+        message: `Order placement FAILED: ${res?.reason || 'unknown'}${res?.error ? ' — ' + String(res.error).slice(0, 200) : ''}${res?.missing ? ' (missing: ' + res.missing.join(', ') + ')' : ''}`,
       });
     }
   } catch (e) {
