@@ -17,7 +17,7 @@ import { assess, recordSignalAccepted, detectAccountType, classifyAccountFromApi
 import { LIVE_UNLOCK_PHRASE, DEFAULTS } from './lib/defaults.js';
 import { addTicks, buildBars, getTickStats, getLatestTick } from './lib/tick-store.js';
 import { fetchExnessCandles, barsToSyntheticTicks } from './lib/exness-history.js';
-import { placeMarketOrder } from './lib/exness-orders.js';
+import { placeMarketOrder, modifyPositionSl } from './lib/exness-orders.js';
 import { fetchBalance, fetchPositions } from './lib/exness-account.js';
 
 const ALARM_NAME = 'exscalp_poll';
@@ -104,6 +104,69 @@ async function broadcastCommentary(tabId, entry) {
 // Refresh balance from Exness and update derived stats (today's P&L,
 // starting balance, win/loss counts derived from history). Today is
 // reset on the first call of a new UTC day.
+// Walk our tracked open trades. For each, check live progress toward TP
+// and once it crosses beThreshold (default 50%), modify SL to the entry
+// price ("break-even"). Worst case after that is a $0 outcome instead of
+// a -SL loss.
+async function manageOpenTrades(tabId) {
+  const cur = await getSettings();
+  const accountId = cur.state.exnessAccountId;
+  if (!accountId || !cur.management?.beEnabled) return;
+  const openTrades = cur.state.openTrades || [];
+  if (!openTrades.length) return;
+
+  // Fetch live positions to know which of our tracked ones are still open
+  // and what the current unrealized price is.
+  const livePositions = await fetchPositions({ tabId, accountId });
+  if (!Array.isArray(livePositions)) return;
+  const liveById = new Map(livePositions.map(p => [String(p.position_id || p.id || p.ticket_id), p]));
+
+  const stillOpen = [];
+  let didModify = false;
+  for (const t of openTrades) {
+    const live = liveById.get(String(t.positionId));
+    if (!live) {
+      // Position no longer exists in account — closed by SL/TP/manual. Drop it.
+      continue;
+    }
+    stillOpen.push(t);
+    if (t.beMoved) continue;
+
+    // Current price for the trade direction
+    const currentPrice = (t.side === 'long' ? live.bid : live.ask) ?? live.price ?? live.current_price;
+    if (typeof currentPrice !== 'number') continue;
+
+    // Progress 0..1 from entry toward TP
+    const progress = t.side === 'long'
+      ? (currentPrice - t.entry) / (t.tp - t.entry)
+      : (t.entry - currentPrice) / (t.entry - t.tp);
+    if (progress < cur.management.beThreshold) continue;
+
+    // Cross the threshold: move SL to entry (BE)
+    const newSL = t.entry;
+    const res = await modifyPositionSl({ tabId, accountId, positionId: t.positionId, stopLoss: newSL });
+    if (res.ok) {
+      t.beMoved = true;
+      t.sl = newSL;
+      didModify = true;
+      await broadcastCommentary(tabId, {
+        kind: 'placed',
+        message: `Moved SL → BE on ${t.side.toUpperCase()} pos ${t.positionId} (price at ${currentPrice.toFixed(2)}, ${(progress * 100).toFixed(0)}% to TP)`,
+      });
+    } else {
+      await broadcastCommentary(tabId, {
+        kind: 'failed',
+        message: `BE move FAILED on pos ${t.positionId}: ${res.error?.slice(0, 100) || res.status}`,
+      });
+    }
+  }
+
+  // Persist updates: prune closed positions, save beMoved flags
+  if (stillOpen.length !== openTrades.length || didModify) {
+    await updateState({ openTrades: stillOpen });
+  }
+}
+
 async function refreshBalance(tabId) {
   const cur = await getSettings();
   const accountId = cur.state.exnessAccountId;
@@ -349,6 +412,9 @@ async function runCycle() {
   // even when no signals are firing. Cheap call (~95-byte response).
   await refreshBalance(tab.id);
 
+  // Manage open positions: move SL to BE once half-way to TP.
+  await manageOpenTrades(tab.id);
+
   if (!signal) {
     trace('cycle', 'no_signal', { reason, strategy });
     await sendToContent(tab.id, { type: 'TICK', reason, lastBar });
@@ -494,6 +560,16 @@ async function executePending(tabId, pending) {
     if (res?.ok) {
       await pushHistory({ kind: 'placed', pending, exec: res });
       trace('exec', 'placed', { id: pending.id, exec: res });
+      // Track this position for BE management
+      const positionId = res?.api?.response?.order?.position_id || res?.api?.response?.position_id;
+      if (positionId) {
+        const cur = await getSettings();
+        const openTrades = [...(cur.state.openTrades || []), {
+          positionId, side: pending.side, entry: pending.entry, sl: pending.sl, tp: pending.tp,
+          atr: pending.atr, beMoved: false, placedAt: Date.now(),
+        }];
+        await updateState({ openTrades });
+      }
       await broadcastCommentary(tabId, {
         kind: 'placed',
         message: `Order placed (via ${res.via || '?'}) ${pending.side.toUpperCase()} ${pending.lot} lot @ ${pending.entry}. SL ${pending.sl} / TP ${pending.tp}.`,
