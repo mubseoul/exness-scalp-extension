@@ -403,6 +403,23 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ ok: true });
           return;
         }
+        case 'RT_HTTP': {
+          // Captured HTTP request from realtime-hook so we can find Exness's
+          // historical bar endpoint without having the user manually inspect
+          // network tab. Body is truncated to 800 chars by the hook.
+          trace('rt', 'http_capture', {
+            url: msg.url,
+            method: msg.method,
+            status: msg.status,
+            contentType: msg.contentType,
+            bodyLen: msg.bodyLen,
+            tookMs: msg.tookMs,
+            error: msg.error,
+            bodyPreview: msg.bodyPreview,
+          });
+          sendResponse({ ok: true });
+          return;
+        }
         default:
           sendResponse({ ok: false, reason: 'unknown_message' });
       }

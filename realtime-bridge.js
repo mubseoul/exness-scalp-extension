@@ -36,6 +36,21 @@
       return;
     }
 
+    if (p.stage === 'http') {
+      chrome.runtime.sendMessage({
+        type: 'RT_HTTP',
+        url: p.url,
+        method: p.method,
+        status: p.status,
+        contentType: p.contentType,
+        bodyPreview: p.bodyPreview,
+        bodyLen: p.bodyLen,
+        tookMs: p.tookMs,
+        error: p.error,
+      }).catch(() => {});
+      return;
+    }
+
     // Connection lifecycle events — always relayed (low frequency)
     chrome.runtime.sendMessage({
       type: 'RT_CONN',

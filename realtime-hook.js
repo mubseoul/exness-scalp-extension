@@ -112,5 +112,105 @@
   PatchedWebSocket.CLOSED     = NativeWebSocket.CLOSED;
 
   window.WebSocket = PatchedWebSocket;
-  console.info('[ExScalp hook] WebSocket patched at document_start (tick parser active)');
+
+  // ============================================================
+  // HTTP capture — fetch() + XHR
+  // ============================================================
+  // We want to discover Exness's historical-bar endpoint (TradingView
+  // UDF-style) so we can backfill ticks on cold start. The endpoint is
+  // hit when the chart loads or pans. We capture URL + method + status +
+  // response body (first 800 chars) for any URL that looks chart-related
+  // and trace it via the bridge.
+
+  const HTTP_HOST_HINTS = ['exweb.mobi', 'tradingview.com'];
+  const HTTP_PATH_RE = /(history|datafeed|udf|\/bars|ohlc|tex-trading|chart|quotes|symbols|resolve)/i;
+  const HTTP_DEDUP = new Map();           // url → last-trace ts
+  const HTTP_DEDUP_MS = 5000;
+
+  function isInterestingHttp(url) {
+    try {
+      const u = new URL(url, location.href);
+      if (HTTP_HOST_HINTS.some(h => u.host.includes(h))) return true;
+      if (HTTP_PATH_RE.test(u.pathname + u.search)) return true;
+    } catch {}
+    return false;
+  }
+
+  function maybeForwardHttp(info) {
+    const key = info.url.split('?')[0] + '|' + info.method;
+    const now = Date.now();
+    const last = HTTP_DEDUP.get(key) || 0;
+    if (now - last < HTTP_DEDUP_MS) return;
+    HTTP_DEDUP.set(key, now);
+    forward({ stage: 'http', ...info });
+  }
+
+  const origFetch = window.fetch;
+  window.fetch = function (input, init) {
+    const url = typeof input === 'string' ? input : (input && input.url) || '';
+    const method = ((init && init.method) || (typeof input !== 'string' && input?.method) || 'GET').toUpperCase();
+    if (!isInterestingHttp(url)) return origFetch.apply(this, arguments);
+    const t0 = Date.now();
+    return origFetch.apply(this, arguments).then(async (resp) => {
+      try {
+        const clone = resp.clone();
+        const text = await clone.text().catch(() => '');
+        maybeForwardHttp({
+          url: String(url),
+          method,
+          status: resp.status,
+          contentType: resp.headers.get('content-type') || null,
+          bodyPreview: text.slice(0, 800),
+          bodyLen: text.length,
+          tookMs: Date.now() - t0,
+        });
+      } catch {}
+      return resp;
+    }).catch((e) => {
+      maybeForwardHttp({ url: String(url), method, status: 0, error: String(e?.message || e), tookMs: Date.now() - t0 });
+      throw e;
+    });
+  };
+
+  const OrigXHR = window.XMLHttpRequest;
+  function PatchedXHR() {
+    const xhr = new OrigXHR();
+    let _url = '', _method = 'GET', _t0 = 0;
+    const origOpen = xhr.open;
+    xhr.open = function (method, url) {
+      _method = String(method || 'GET').toUpperCase();
+      _url = String(url || '');
+      return origOpen.apply(this, arguments);
+    };
+    const origSend = xhr.send;
+    xhr.send = function () {
+      _t0 = Date.now();
+      if (isInterestingHttp(_url)) {
+        xhr.addEventListener('loadend', () => {
+          try {
+            maybeForwardHttp({
+              url: _url,
+              method: _method,
+              status: xhr.status,
+              contentType: xhr.getResponseHeader('content-type'),
+              bodyPreview: typeof xhr.responseText === 'string' ? xhr.responseText.slice(0, 800) : null,
+              bodyLen: typeof xhr.responseText === 'string' ? xhr.responseText.length : null,
+              tookMs: Date.now() - _t0,
+            });
+          } catch {}
+        });
+      }
+      return origSend.apply(this, arguments);
+    };
+    return xhr;
+  }
+  // Preserve statics + prototype so the page sees a normal XHR
+  PatchedXHR.prototype = OrigXHR.prototype;
+  for (const k of Object.getOwnPropertyNames(OrigXHR)) {
+    if (k === 'prototype' || k === 'name' || k === 'length') continue;
+    try { PatchedXHR[k] = OrigXHR[k]; } catch {}
+  }
+  window.XMLHttpRequest = PatchedXHR;
+
+  console.info('[ExScalp hook] WebSocket + HTTP patched at document_start');
 })();
