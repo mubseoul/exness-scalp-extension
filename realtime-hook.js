@@ -145,11 +145,39 @@
     forward({ stage: 'http', ...info });
   }
 
+  // Capture the most recent Authorization header on requests to Exness's
+  // REST API. The page uses a bearer JWT that's not in cookies — without it
+  // our own service-worker fetches get 401. We stash the latest one so the
+  // service worker can replay it for backfill / order placement.
+  window.__exscalpAuthHeader = null;
+
+  function extractAuthHeader(init, input) {
+    try {
+      let h = init && init.headers;
+      if (!h && typeof input !== 'string' && input?.headers) h = input.headers;
+      if (!h) return null;
+      if (h instanceof Headers) return h.get('authorization') || h.get('Authorization');
+      if (typeof h.get === 'function') return h.get('authorization') || h.get('Authorization');
+      // Plain object
+      for (const k of Object.keys(h)) {
+        if (k.toLowerCase() === 'authorization') return h[k];
+      }
+    } catch {}
+    return null;
+  }
+
   const origFetch = window.fetch;
   window.fetch = function (input, init) {
     const url = typeof input === 'string' ? input : (input && input.url) || '';
     const method = ((init && init.method) || (typeof input !== 'string' && input?.method) || 'GET').toUpperCase();
     if (!isInterestingHttp(url)) return origFetch.apply(this, arguments);
+
+    // Sniff the bearer token if present.
+    const auth = extractAuthHeader(init, input);
+    if (auth && /^bearer\s/i.test(auth)) {
+      window.__exscalpAuthHeader = auth;
+    }
+
     const t0 = Date.now();
     return origFetch.apply(this, arguments).then(async (resp) => {
       try {
@@ -163,6 +191,9 @@
           bodyPreview: text.slice(0, 800),
           bodyLen: text.length,
           tookMs: Date.now() - t0,
+          authPresent: !!auth,
+          authScheme: auth ? auth.split(' ')[0] : null,
+          authLen: auth ? auth.length : 0,
         });
       } catch {}
       return resp;
@@ -175,12 +206,20 @@
   const OrigXHR = window.XMLHttpRequest;
   function PatchedXHR() {
     const xhr = new OrigXHR();
-    let _url = '', _method = 'GET', _t0 = 0;
+    let _url = '', _method = 'GET', _t0 = 0, _auth = null;
     const origOpen = xhr.open;
     xhr.open = function (method, url) {
       _method = String(method || 'GET').toUpperCase();
       _url = String(url || '');
       return origOpen.apply(this, arguments);
+    };
+    const origSetHeader = xhr.setRequestHeader;
+    xhr.setRequestHeader = function (name, value) {
+      if (String(name).toLowerCase() === 'authorization') {
+        _auth = value;
+        if (/^bearer\s/i.test(value)) window.__exscalpAuthHeader = value;
+      }
+      return origSetHeader.apply(this, arguments);
     };
     const origSend = xhr.send;
     xhr.send = function () {
@@ -196,6 +235,8 @@
               bodyPreview: typeof xhr.responseText === 'string' ? xhr.responseText.slice(0, 800) : null,
               bodyLen: typeof xhr.responseText === 'string' ? xhr.responseText.length : null,
               tookMs: Date.now() - _t0,
+              authPresent: !!_auth,
+              authScheme: _auth ? _auth.split(' ')[0] : null,
             });
           } catch {}
         });
