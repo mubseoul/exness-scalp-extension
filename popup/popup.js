@@ -221,6 +221,7 @@ $('#confirmUnlock').addEventListener('click', async () => {
 const SETTINGS_FIELDS = [
   ['confirmEachTrade', 'confirmEachTrade'],
   ['paused',           'paused'],
+  ['strategy',         'strategy'],
   ['rangeMinutes',     'signal.rangeMinutes'],
   ['breakoutAtrMult',  'signal.breakoutAtrMult'],
   ['minAtrUsd',        'signal.minAtrUsd'],
@@ -256,6 +257,7 @@ async function paintSettings() {
     if (!el) continue;
     const v = get(s, path);
     if (el.type === 'checkbox') el.checked = !!v;
+    else if (el.tagName === 'SELECT') el.value = v ?? '';
     else el.value = v ?? '';
   }
 }
@@ -265,8 +267,10 @@ $('#saveSettings').addEventListener('click', async () => {
   for (const [id, path] of SETTINGS_FIELDS) {
     const el = $('#' + id);
     if (!el) continue;
-    const v = el.type === 'checkbox' ? el.checked : Number(el.value);
-    if (el.type === 'number' && !Number.isFinite(v)) continue;
+    let v;
+    if (el.type === 'checkbox') v = el.checked;
+    else if (el.tagName === 'SELECT') v = el.value;
+    else { v = Number(el.value); if (!Number.isFinite(v)) continue; }
     setPath(patch, path, v);
   }
   await saveSettings(patch);

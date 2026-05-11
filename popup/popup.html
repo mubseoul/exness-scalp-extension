@@ -94,6 +94,18 @@
       </fieldset>
 
       <fieldset>
+        <legend>Strategy</legend>
+        <small>breakout = trade with momentum out of a range. zone_fade = trade rejections off PDH/PDL/round/Asian/swing zones. both = whichever fires first each cycle.</small>
+        <label>Strategy
+          <select id="strategy">
+            <option value="both">both (recommended)</option>
+            <option value="breakout">breakout only</option>
+            <option value="zone_fade">zone_fade only</option>
+          </select>
+        </label>
+      </fieldset>
+
+      <fieldset>
         <legend>Signal</legend>
         <div class="grid">
           <label>Range (min)<input type="number" id="rangeMinutes" min="3" max="60"></label>

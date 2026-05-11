@@ -373,7 +373,8 @@ label.row {
 label.row.danger { color: var(--danger); }
 
 input[type="text"],
-input[type="number"] {
+input[type="number"],
+select {
   width: 100%;
   padding: 7px 10px;
   background: var(--surface);

@@ -11,6 +11,7 @@ import { getSettings, pushHistory, updateState, saveSettings } from './lib/stora
 import { trace, traceError } from './lib/trace.js';
 import { fetchBarsWithFallback } from './lib/price-feed.js';
 import { detectBreakout } from './lib/signal-engine.js';
+import { computeZones, detectZoneFade } from './lib/zone-engine.js';
 import { vetoOrApprove, marketCommentary } from './lib/claude-trade.js';
 import { assess, recordSignalAccepted, detectAccountType, classifyAccountFromApi } from './lib/risk-manager.js';
 import { LIVE_UNLOCK_PHRASE, DEFAULTS } from './lib/defaults.js';
@@ -253,26 +254,82 @@ async function runCycle() {
     cycleCount: (cur.state.cycleCount || 0) + 1,
   });
 
-  // 2) Signal
-  const { signal, reason } = detectBreakout(bars, s.signal);
+  // 2) Signal — run breakout and/or zone fade depending on strategy
+  const strategy = s.strategy || 'both';
+  let signal = null, reason = '', signalKind = '';
+
+  if (strategy === 'breakout' || strategy === 'both') {
+    const bo = detectBreakout(bars, s.signal);
+    if (bo.signal) {
+      signal = bo.signal;
+      reason = bo.reason;
+      signalKind = 'breakout';
+    } else if (strategy === 'breakout') {
+      reason = bo.reason;
+    }
+  }
+
+  if (!signal && (strategy === 'zone_fade' || strategy === 'both')) {
+    // Fetch supporting timeframes (cached opportunistically — same auth path)
+    const accountId = (await getSettings()).state.exnessAccountId;
+    let dailyBars = [], bars4h = [];
+    if (accountId) {
+      try {
+        const { fetchExnessCandles } = await import('./lib/exness-history.js');
+        const [d, h4] = await Promise.all([
+          fetchExnessCandles({ tabId: tab.id, accountId, symbol: 'XAUUSDr', timeFrameMin: 1440, count: 5 }),
+          fetchExnessCandles({ tabId: tab.id, accountId, symbol: 'XAUUSDr', timeFrameMin: 240,  count: 40 }),
+        ]);
+        dailyBars = d || []; bars4h = h4 || [];
+      } catch (e) {
+        traceError('cycle', 'zone_history_fetch_failed', e);
+      }
+    }
+    const { zones, atr } = computeZones({ bars1m: bars, dailyBars, bars4h });
+    const zf = detectZoneFade(bars, zones, atr);
+    if (zf.signal) {
+      signal = zf.signal;
+      reason = zf.reason;
+      signalKind = 'zone_fade';
+    } else if (!signal) {
+      // include near-zone info in the scanning commentary
+      reason = reason || zf.reason;
+      if (zf.near) {
+        await broadcastCommentary(tab.id, {
+          kind: 'scanning',
+          message: `Scanning… price ${lastBar.c.toFixed(2)} • nearest ${zf.near.type} zone ${zf.near.bottom}-${zf.near.top} (sources: ${zf.near.sources.join(',')}, touches ${zf.near.touchesToday}). ${zf.near.distance.toFixed(2)} away.`,
+        });
+        await maybeNarrateMarket(tab.id, bars, s);
+        await sendToContent(tab.id, { type: 'TICK', reason: 'no_zone_fade', lastBar });
+        return;
+      }
+    }
+  }
+
   if (!signal) {
-    trace('cycle', 'no_signal', { reason });
+    trace('cycle', 'no_signal', { reason, strategy });
     await sendToContent(tab.id, { type: 'TICK', reason, lastBar });
     await broadcastCommentary(tab.id, {
       kind: 'scanning',
       message: prettyNoSignal(reason, bars, s),
     });
-    // Periodic Claude narration when nothing's firing — every commentaryEveryMin
-    // minutes, ask Claude for a one-liner on what the market is doing.
     await maybeNarrateMarket(tab.id, bars, s);
     return;
   }
   await updateState({ lastAtr: signal.atr });
-  trace('cycle', 'signal_detected', { side: signal.side, entry: signal.entry, atr: signal.atr });
-  await broadcastCommentary(tab.id, {
-    kind: 'breakout',
-    message: `Breakout detected: ${signal.side.toUpperCase()} @ ${signal.entry} • range ${signal.range.low}-${signal.range.high}, ATR $${signal.atr.toFixed(2)}`,
-  });
+  trace('cycle', 'signal_detected', { kind: signalKind, side: signal.side, entry: signal.entry, atr: signal.atr });
+  if (signalKind === 'zone_fade') {
+    const z = signal.zone;
+    await broadcastCommentary(tab.id, {
+      kind: 'breakout',
+      message: `Zone fade: ${signal.side.toUpperCase()} @ ${signal.entry} • ${z.type} ${z.bottom}-${z.top} (${z.sources.join(',')}, touches ${z.touchesToday}), wick ${(signal.wickPct*100).toFixed(0)}%, ATR $${signal.atr.toFixed(2)}`,
+    });
+  } else {
+    await broadcastCommentary(tab.id, {
+      kind: 'breakout',
+      message: `Breakout: ${signal.side.toUpperCase()} @ ${signal.entry} • range ${signal.range.low}-${signal.range.high}, ATR $${signal.atr.toFixed(2)}`,
+    });
+  }
 
   // 3) Risk gate
   const verdict = await assess();
