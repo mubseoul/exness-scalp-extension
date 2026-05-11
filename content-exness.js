@@ -242,6 +242,17 @@
     return null;
   }
 
+  // Find any button whose text content STARTS WITH the given prefix.
+  // Used for "Confirm Buy 0.01 lots" / "Confirm Sell 0.01 lots" which include
+  // dynamic lot text we can't pin to a stable class.
+  function findButtonStartingWith(prefix) {
+    const wanted = prefix.trim().toLowerCase();
+    for (const b of document.querySelectorAll('button')) {
+      if ((b.textContent || '').trim().toLowerCase().startsWith(wanted)) return b;
+    }
+    return null;
+  }
+
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
   function waitFor(predicate, timeoutMs = 3000, intervalMs = 50) {
@@ -268,56 +279,66 @@
     }
 
     try {
-      // Step 1: switch to Pending tab. Pending mode adds a Price field so
-      // we can set the exact entry — and it requires the form to settle
-      // through React state before the Buy/Sell button fires, which makes
-      // the whole sequence more reliable than Market-mode rapid clicking.
+      // Step 1: switch to Pending tab. Adds Open Price field, validates
+      // SL/TP positions relative to entry.
       const pendingTab = findToggleButton('Pending');
       if (pendingTab) {
         realClick(pendingTab);
-        await sleep(250);  // let React swap in the Price field
-      } else {
-        // Fall back to Market mode if we can't find the Pending tab
-        // (Exness layout change). Better than aborting.
+        await sleep(300);
       }
 
-      // After tab switch the input set may have changed (Pending mode adds
-      // a Price input as input[0], pushing lot/SL/TP down by one). Recompute
-      // selectors by querying fresh each time.
+      // Step 2: select side via the top Sell/Buy buttons (these set the
+      // form's direction; the bottom Confirm button submits). The top
+      // buttons embed the current price in their text ("Sell4670.385",
+      // "Buy4670.499") so we match by leading word, not class.
+      const sideText = p.side === 'long' ? 'buy' : 'sell';
+      const topSideBtn = findButtonStartingWith(sideText);
+      if (topSideBtn) {
+        realClick(topSideBtn);
+        await sleep(250);
+      }
+
+      // Step 3: fill the form. Exness Pending mode order is:
+      //   inputs[0] = Open price (Stop/Limit entry)
+      //   inputs[1] = Volume
+      //   inputs[2] = Take Profit
+      //   inputs[3] = Stop Loss
+      // The previous build had TP and SL swapped — Exness's red error
+      // ("Min ..." / "Max ...") was a direct symptom of that.
       const allInputs = () => document.querySelectorAll('input.InputBox_input__59aa2');
-
-      // Step 2: fill price (if we're in Pending mode and the field exists)
-      if (pendingTab) {
-        const inputs = allInputs();
-        if (inputs.length >= 4) {
-          setInputValue(inputs[0], p.entry);
-          await sleep(120);
-        }
+      let inputs = allInputs();
+      if (pendingTab && inputs.length >= 4) {
+        setInputValue(inputs[0], p.entry); await sleep(150);
+        inputs = allInputs();
+        setInputValue(inputs[1], p.lot);   await sleep(150);
+        inputs = allInputs();
+        setInputValue(inputs[2], p.tp);    await sleep(150);
+        inputs = allInputs();
+        setInputValue(inputs[3], p.sl);    await sleep(250);
+      } else {
+        // Market-mode fallback if Pending tab is gone — just lot/SL/TP
+        setInputValue(inputs[0], p.lot);  await sleep(150);
+        setInputValue(inputs[1], p.tp);   await sleep(150);
+        setInputValue(inputs[2], p.sl);   await sleep(200);
       }
 
-      // Step 3: lot. Index shifts depending on Pending vs Market.
-      const inputs = allInputs();
-      const offset = pendingTab && inputs.length >= 4 ? 1 : 0;
-      setInputValue(inputs[0 + offset], p.lot);
-      await sleep(120);
-      setInputValue(inputs[1 + offset], p.sl);
-      await sleep(120);
-      setInputValue(inputs[2 + offset], p.tp);
-      await sleep(200);
-
-      // Step 4: click Buy or Sell with proper synthetic events
-      const buttonSelector = p.side === 'long' ? sel.buyButton : sel.sellButton;
-      const btn = await waitFor(() => resolveSelector(buttonSelector));
-      realClick(btn);
-
-      // Step 5: confirm dialog if Exness shows one
-      await sleep(400);
-      if (sel.confirmButton) {
-        try {
-          const cbtn = await waitFor(() => resolveSelector(sel.confirmButton), 1500);
-          realClick(cbtn);
-        } catch { /* no confirm dialog — order may have placed directly */ }
+      // Step 4: click the BOTTOM "Confirm Buy 0.01 lots" (or "Confirm Sell")
+      // — this is the actual submit button on Pending mode. The top side
+      // button is just direction.
+      const confirmPrefix = p.side === 'long' ? 'confirm buy' : 'confirm sell';
+      let confirmBtn = null;
+      for (let i = 0; i < 12; i++) {
+        confirmBtn = findButtonStartingWith(confirmPrefix);
+        if (confirmBtn && !confirmBtn.disabled && !confirmBtn.getAttribute('aria-disabled')) break;
+        await sleep(120);
       }
+      if (!confirmBtn) {
+        return { ok: false, reason: 'confirm_button_not_found' };
+      }
+      if (confirmBtn.disabled || confirmBtn.getAttribute('aria-disabled') === 'true') {
+        return { ok: false, reason: 'confirm_disabled', hint: 'Exness rejected the values — check TP/SL vs entry' };
+      }
+      realClick(confirmBtn);
 
       return { ok: true, placedAt: Date.now(), priceAtClick: lastPrice, mode: pendingTab ? 'pending' : 'market' };
     } catch (e) {
