@@ -11,7 +11,7 @@ import { getSettings, pushHistory, updateState, saveSettings } from './lib/stora
 import { trace, traceError } from './lib/trace.js';
 import { fetchBarsWithFallback } from './lib/price-feed.js';
 import { detectBreakout } from './lib/signal-engine.js';
-import { vetoOrApprove } from './lib/claude-trade.js';
+import { vetoOrApprove, marketCommentary } from './lib/claude-trade.js';
 import { assess, recordSignalAccepted, detectAccountType, classifyAccountFromApi } from './lib/risk-manager.js';
 import { LIVE_UNLOCK_PHRASE, DEFAULTS } from './lib/defaults.js';
 import { addTicks, buildBars, getTickStats, getLatestTick } from './lib/tick-store.js';
@@ -96,6 +96,42 @@ async function sendToContent(tabId, msg) {
 
 async function broadcastCommentary(tabId, entry) {
   return sendToContent(tabId, { type: 'AI_FEED', entry: { ...entry, at: Date.now() } });
+}
+
+async function maybeNarrateMarket(tabId, bars, s) {
+  if (!s.claude.enabled) return;
+  const everyMin = s.claude.commentaryEveryMin || 5;
+  const cur = await getSettings();
+  const lastAt = cur.state.lastCommentaryAt || 0;
+  if (Date.now() - lastAt < everyMin * 60 * 1000) return;
+  // Need enough bars + a meaningful range to talk about
+  if (bars.length < s.signal.rangeMinutes + 16) return;
+  const rangeBars = bars.slice(-1 - s.signal.rangeMinutes, -1);
+  const range = {
+    high: Math.max(...rangeBars.map(b => b.h)),
+    low:  Math.min(...rangeBars.map(b => b.l)),
+  };
+  const closed = bars[bars.length - 1];
+  // Quick ATR(14) for the prompt
+  let atr = 0;
+  for (let i = bars.length - 14; i < bars.length; i++) {
+    const cur = bars[i], prev = bars[i - 1];
+    if (!prev) continue;
+    atr += Math.max(cur.h - cur.l, Math.abs(cur.h - prev.c), Math.abs(cur.l - prev.c));
+  }
+  atr /= 14;
+
+  await updateState({ lastCommentaryAt: Date.now() });
+  const note = await marketCommentary(bars, { range, atr, lastClose: closed.c }, {
+    model: s.claude.model,
+    timeoutSec: s.claude.timeoutSec,
+  });
+  if (!note) return;
+  await updateState({ lastClaudeOkTs: Date.now() });
+  await broadcastCommentary(tabId, {
+    kind: 'analysis',
+    message: `Claude: ${note.reason}  →  Watch: ${note.watch}`,
+  });
 }
 
 function prettyNoSignal(reason, bars, s) {
@@ -226,6 +262,9 @@ async function runCycle() {
       kind: 'scanning',
       message: prettyNoSignal(reason, bars, s),
     });
+    // Periodic Claude narration when nothing's firing — every commentaryEveryMin
+    // minutes, ask Claude for a one-liner on what the market is doing.
+    await maybeNarrateMarket(tab.id, bars, s);
     return;
   }
   await updateState({ lastAtr: signal.atr });

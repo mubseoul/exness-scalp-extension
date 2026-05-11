@@ -34,6 +34,10 @@
     overlay.setLiveState(settings);
     startPricePoll();
     startStatePoll();
+    // Kick the service worker into running a cycle right away so the AI
+    // feed populates within seconds rather than waiting up to 30s for
+    // the next alarm.
+    try { chrome.runtime.sendMessage({ type: 'RUN_NOW' }); } catch {}
   });
 
   // chrome.storage.onChanged fires the moment background.js writes; combined
@@ -275,7 +279,7 @@
         <button class="collapse" title="Collapse">–</button>
       </header>
       <div class="feed-body">
-        <div class="empty">Waiting for first cycle…</div>
+        <div class="empty">Connecting to feed… first read in a few seconds.</div>
       </div>
     `;
     const body = root.querySelector('.feed-body');
@@ -318,7 +322,7 @@
 
     function render() {
       if (!items.length) {
-        body.innerHTML = '<div class="empty">Waiting for first cycle…</div>';
+        body.innerHTML = '<div class="empty">Connecting to feed… first read in a few seconds.</div>';
         return;
       }
       body.innerHTML = '';

@@ -227,6 +227,7 @@
 
 #exscalp-ai-feed .feed-item.scanning { border-left-color: var(--exs-fg-dim); }
 #exscalp-ai-feed .feed-item.waiting  { border-left-color: var(--exs-warn); }
+#exscalp-ai-feed .feed-item.analysis { border-left-color: var(--exs-accent); background: rgba(94, 168, 255, 0.05); }
 #exscalp-ai-feed .feed-item.breakout { border-left-color: var(--exs-accent); }
 #exscalp-ai-feed .feed-item.asking   { border-left-color: var(--exs-accent); }
 #exscalp-ai-feed .feed-item.claude_go   { border-left-color: var(--exs-long); }
