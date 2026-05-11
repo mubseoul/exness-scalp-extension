@@ -514,6 +514,43 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ ok: true });
           return;
         }
+        case 'FORCE_TEST_SIGNAL': {
+          // Manufacture a synthetic signal so the user can verify the full
+          // approve -> place -> close pipeline on demo without waiting for
+          // a real breakout. Uses the latest tick as entry, tiny SL/TP.
+          const s = await getSettings();
+          const tab = await findExnessTab();
+          if (!tab) { sendResponse({ ok: false, reason: 'no_tab' }); return; }
+          const latest = await getLatestTick();
+          if (!latest) { sendResponse({ ok: false, reason: 'no_ticks' }); return; }
+          const price = (latest.b + latest.a) / 2;
+          const side = msg.side || 'long';
+          const pending = {
+            id: crypto.randomUUID(),
+            side,
+            entry: Math.round(price * 100) / 100,
+            sl: Math.round((side === 'long' ? price - 0.5 : price + 0.5) * 100) / 100,
+            tp: Math.round((side === 'long' ? price + 0.75 : price - 0.75) * 100) / 100,
+            atr: 0.5,
+            lot: s.risk.lotSize,
+            accountType: 'demo',
+            claude: { verdict: 'go', confidence: 100, reason: 'TEST signal (forced by user)' },
+            createdAt: Date.now(),
+            confirmTimeoutSec: 0,
+          };
+          await updateState({ pending });
+          await broadcastCommentary(tab.id, {
+            kind: 'breakout',
+            message: `TEST signal: ${side.toUpperCase()} @ ${pending.entry} (forced, no real edge — verifying pipeline)`,
+          });
+          if (s.confirmEachTrade) {
+            await sendToContent(tab.id, { type: 'CONFIRM', pending });
+          } else {
+            await executePending(tab.id, pending);
+          }
+          sendResponse({ ok: true });
+          return;
+        }
         case 'REBUILD_ALARM': {
           await ensureAlarm();
           sendResponse({ ok: true });

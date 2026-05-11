@@ -182,6 +182,13 @@ $('#runNowBtn').addEventListener('click', async () => {
   setTimeout(() => { $('#runNowBtn').textContent = 'Run now'; paintStatus(); }, 600);
 });
 
+$('#forceTestSignal').addEventListener('click', async () => {
+  $('#forceTestSignal').textContent = 'Firing…';
+  const r = await chrome.runtime.sendMessage({ type: 'FORCE_TEST_SIGNAL', side: 'long' });
+  $('#forceTestSignal').textContent = r?.ok ? 'Fired' : (r?.reason || 'failed');
+  setTimeout(() => $('#forceTestSignal').textContent = 'Test trade', 2000);
+});
+
 $('#claudeProbe').addEventListener('click', async () => {
   $('#claudeProbe').textContent = 'Testing…';
   try {

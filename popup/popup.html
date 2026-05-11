@@ -74,7 +74,13 @@
         <div class="rate-cell"><span class="rate-num" id="rateClaudeMs">—</span><span class="rate-lbl">Claude ms</span></div>
       </div>
 
-      <h3 class="section-title">Recent activity <button id="claudeProbe" class="btn-sm">Test Claude</button></h3>
+      <h3 class="section-title">
+        Recent activity
+        <span style="display:inline-flex; gap:6px;">
+          <button id="forceTestSignal" class="btn-sm" title="Manufacture a synthetic LONG signal at current price to verify the place→close pipeline works on demo">Test trade</button>
+          <button id="claudeProbe" class="btn-sm">Test Claude</button>
+        </span>
+      </h3>
       <div id="historyList" class="history-list">
         <p class="empty">No activity yet.</p>
       </div>
