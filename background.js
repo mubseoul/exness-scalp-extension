@@ -12,9 +12,10 @@ import { trace, traceError } from './lib/trace.js';
 import { fetchBarsWithFallback } from './lib/price-feed.js';
 import { detectBreakout } from './lib/signal-engine.js';
 import { vetoOrApprove } from './lib/claude-trade.js';
-import { assess, recordSignalAccepted, detectAccountType } from './lib/risk-manager.js';
+import { assess, recordSignalAccepted, detectAccountType, classifyAccountFromApi } from './lib/risk-manager.js';
 import { LIVE_UNLOCK_PHRASE, DEFAULTS } from './lib/defaults.js';
 import { addTicks, buildBars, getTickStats, getLatestTick } from './lib/tick-store.js';
+import { fetchExnessCandles, barsToSyntheticTicks } from './lib/exness-history.js';
 
 const ALARM_NAME = 'exscalp_poll';
 
@@ -122,10 +123,14 @@ async function runCycle() {
     trace('cycle', 'no_exness_tab', {});
     return;
   }
-  const acctType = s.exness.accountTypeOverride || detectAccountType(tab.url);
+  const acctType = s.exness.accountTypeOverride || s.state.detectedAccountType || detectAccountType(tab.url);
   if (acctType === 'live' && !s.liveAccountUnlocked) {
-    trace('cycle', 'live_locked', { url: tab.url });
+    trace('cycle', 'live_locked', { url: tab.url, detected: acctType });
     await sendToContent(tab.id, { type: 'STATUS', state: 'live_locked' });
+    await broadcastCommentary(tab.id, {
+      kind: 'blocked',
+      message: 'Live account detected — type the unlock phrase in Settings to enable trading.',
+    });
     return;
   }
 
@@ -140,22 +145,45 @@ async function runCycle() {
     if (bars.length >= minBarsNeeded) {
       source = 'exness-ws';
     } else {
-      // Not enough ticks yet. Try Yahoo as bootstrap.
+      // Not enough ticks yet. Bootstrap from Exness's own historical candles
+      // endpoint — same data source the chart uses. Requires us to have seen
+      // the WS to know the accountId.
       trace('cycle', 'tick_history_thin', { count: bars.length, needed: minBarsNeeded });
-      try {
-        const bundle = await fetchBarsWithFallback(
-          s.signal.instrument,
-          s.signal.fallbackInstrument,
-          s.signal.interval,
-          Math.max(s.signal.rangeMinutes + 30, 60),
-        );
-        if (bundle?.bars?.length >= minBarsNeeded) {
-          bars = bundle.bars;
-          source = bundle.source || bundle.symbol;
+      const accountId = (await getSettings()).state.exnessAccountId;
+      if (accountId) {
+        try {
+          const historical = await fetchExnessCandles({
+            tabId: tab.id,
+            accountId,
+            symbol: 'XAUUSDr',
+            timeFrameMin: 1,
+            count: 200,
+          });
+          if (historical && historical.length) {
+            await addTicks(barsToSyntheticTicks(historical));
+            bars = await buildBars(Math.max(s.signal.rangeMinutes + 30, 45));
+            if (bars.length >= minBarsNeeded) source = 'exness-history';
+          }
+        } catch (e) {
+          traceError('cycle', 'exness_history_fallback_failed', e);
         }
-      } catch (e) {
-        // Yahoo has been 404'ing — accepted failure.
-        traceError('cycle', 'yahoo_fallback_failed', e);
+      }
+      // Final fallback: Yahoo (now mostly 404, kept for completeness)
+      if (!source) {
+        try {
+          const bundle = await fetchBarsWithFallback(
+            s.signal.instrument,
+            s.signal.fallbackInstrument,
+            s.signal.interval,
+            Math.max(s.signal.rangeMinutes + 30, 60),
+          );
+          if (bundle?.bars?.length >= minBarsNeeded) {
+            bars = bundle.bars;
+            source = bundle.source || bundle.symbol;
+          }
+        } catch (e) {
+          traceError('cycle', 'yahoo_fallback_failed', e);
+        }
       }
     }
   } catch (e) {
@@ -387,8 +415,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           return;
         }
         case 'RT_CONN': {
-          // WebSocket lifecycle event from realtime-hook
+          // WebSocket lifecycle event from realtime-hook. We sniff the URL
+          // for the account ID, which we need to call the candles endpoint.
           trace('rt', `conn_${msg.state || 'unknown'}`, { url: msg.url, code: msg.code, reason: msg.reason });
+          const m = String(msg.url || '').match(/\/accounts\/(\d+)/);
+          if (m) {
+            const accountId = m[1];
+            const s = await getSettings();
+            if (s.state.exnessAccountId !== accountId) {
+              await updateState({ exnessAccountId: accountId });
+              trace('bg', 'account_id_captured', { accountId });
+            }
+          }
           sendResponse({ ok: true });
           return;
         }
@@ -404,9 +442,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           return;
         }
         case 'RT_HTTP': {
-          // Captured HTTP request from realtime-hook so we can find Exness's
-          // historical bar endpoint without having the user manually inspect
-          // network tab. Body is truncated to 800 chars by the hook.
           trace('rt', 'http_capture', {
             url: msg.url,
             method: msg.method,
@@ -417,6 +452,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             error: msg.error,
             bodyPreview: msg.bodyPreview,
           });
+          // Parse the account info response to determine demo vs live.
+          // URL pattern: .../rtapi/mt5/{trial}/v1/accounts/{id}  (no trailing /balance etc.)
+          if (msg.status === 200 && msg.bodyPreview && /\/accounts\/\d+$/.test(String(msg.url || '').split('?')[0])) {
+            try {
+              const acct = JSON.parse(msg.bodyPreview);
+              const classified = classifyAccountFromApi(acct);
+              const cur = await getSettings();
+              if (cur.state.detectedAccountType !== classified) {
+                await updateState({ detectedAccountType: classified });
+                trace('bg', 'account_classified', { type: classified, fname: acct?.personal?.first_name, emailHost: (acct?.personal?.email || '').split('@')[1] });
+              }
+            } catch {
+              // bodyPreview is truncated to 800 chars; the full account JSON
+              // fits comfortably under that, so a parse failure is rare.
+            }
+          }
           sendResponse({ ok: true });
           return;
         }
