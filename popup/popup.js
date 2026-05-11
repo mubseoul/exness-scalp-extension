@@ -93,10 +93,14 @@ async function paintStatus() {
   const todayStart = new Date(); todayStart.setUTCHours(0,0,0,0);
   const todays = history.filter(h => h.at >= todayStart.getTime());
   const trades = todays.filter(h => h.kind === 'placed').length;
-  // Cycles & signals are approximations — derive from trace later if needed
-  $('#statCyclesToday').textContent  = approxCyclesToday(st);
-  $('#statSignalsToday').textContent = todays.length;
-  $('#statTradesToday').textContent  = trades;
+
+  // Today P&L (live from /balance)
+  const pnl = st.todayPnL || 0;
+  const bal = st.currentBalance;
+  $('#statTodayPnL').textContent = pnl === 0 ? '—' : (pnl >= 0 ? `+$${pnl.toFixed(2)}` : `-$${Math.abs(pnl).toFixed(2)}`);
+  $('#statTodayPnL').style.color = pnl > 0 ? 'var(--success)' : pnl < 0 ? 'var(--danger)' : '';
+  $('#statBalance').textContent  = bal != null ? `$${bal.toFixed(2)}` : '—';
+  $('#statTradesToday').textContent = trades;
 
   const loss = st.todayLossUsd || 0;
   const cap  = settings.risk.maxDailyLossUsd;

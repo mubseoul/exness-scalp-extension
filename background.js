@@ -18,6 +18,7 @@ import { LIVE_UNLOCK_PHRASE, DEFAULTS } from './lib/defaults.js';
 import { addTicks, buildBars, getTickStats, getLatestTick } from './lib/tick-store.js';
 import { fetchExnessCandles, barsToSyntheticTicks } from './lib/exness-history.js';
 import { placeMarketOrder } from './lib/exness-orders.js';
+import { fetchBalance, fetchPositions } from './lib/exness-account.js';
 
 const ALARM_NAME = 'exscalp_poll';
 
@@ -98,6 +99,35 @@ async function sendToContent(tabId, msg) {
 
 async function broadcastCommentary(tabId, entry) {
   return sendToContent(tabId, { type: 'AI_FEED', entry: { ...entry, at: Date.now() } });
+}
+
+// Refresh balance from Exness and update derived stats (today's P&L,
+// starting balance, win/loss counts derived from history). Today is
+// reset on the first call of a new UTC day.
+async function refreshBalance(tabId) {
+  const cur = await getSettings();
+  const accountId = cur.state.exnessAccountId;
+  if (!accountId) return;
+  const data = await fetchBalance({ tabId, accountId });
+  if (!data || typeof data.balance !== 'number') return;
+
+  const todayUtc = new Date().toISOString().slice(0, 10);
+  const patch = { currentBalance: data.balance, currentEquity: data.equity };
+  if (cur.state.balanceDayUtc !== todayUtc || cur.state.startBalance == null) {
+    patch.balanceDayUtc = todayUtc;
+    patch.startBalance = data.balance;
+    trace('account', 'day_rolled', { startBalance: data.balance, todayUtc });
+  }
+  patch.todayPnL = data.balance - (cur.state.startBalance ?? data.balance);
+
+  // Count placed orders from history within today
+  const history = cur.state.history || [];
+  const placedToday = history.filter(h =>
+    h.kind === 'placed' && new Date(h.at).toISOString().slice(0, 10) === todayUtc
+  ).length;
+  patch.tradesPlacedToday = placedToday;
+
+  await updateState(patch);
 }
 
 async function maybeNarrateMarket(tabId, bars, s) {
@@ -314,6 +344,10 @@ async function runCycle() {
       }
     }
   }
+
+  // Lightweight balance check on every cycle so the popup shows live P&L
+  // even when no signals are firing. Cheap call (~95-byte response).
+  await refreshBalance(tab.id);
 
   if (!signal) {
     trace('cycle', 'no_signal', { reason, strategy });
