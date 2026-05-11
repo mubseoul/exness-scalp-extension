@@ -362,19 +362,35 @@ async function runCycle() {
 
 async function executePending(tabId, pending) {
   trace('exec', 'begin', { id: pending.id, side: pending.side });
+  await broadcastCommentary(tabId, {
+    kind: 'placing',
+    message: `Placing order: ${pending.side.toUpperCase()} ${pending.lot} lot @ ${pending.entry} • SL ${pending.sl} / TP ${pending.tp}`,
+  });
   try {
     const res = await sendToContent(tabId, { type: 'EXECUTE', pending });
     if (res?.ok) {
       await pushHistory({ kind: 'placed', pending, exec: res });
       trace('exec', 'placed', { id: pending.id, exec: res });
+      await broadcastCommentary(tabId, {
+        kind: 'placed',
+        message: `Order placed ${pending.side.toUpperCase()} ${pending.lot} lot @ ${pending.entry}. Risking $${(pending.atr).toFixed(2)} to ${pending.side === 'long' ? 'make' : 'make'} $${(pending.atr * 1.5).toFixed(2)} (R:R 1.5).`,
+      });
       if (await wantNotify('desktopOnFill')) notify('Order placed', `${pending.side} @ ${pending.entry}`);
     } else {
       await pushHistory({ kind: 'failed', pending, exec: res });
       trace('exec', 'failed', { id: pending.id, exec: res });
+      await broadcastCommentary(tabId, {
+        kind: 'failed',
+        message: `Order placement FAILED: ${res?.reason || 'unknown'}${res?.missing ? ' (missing: ' + res.missing.join(', ') + ')' : ''}`,
+      });
     }
   } catch (e) {
     traceError('exec', 'threw', e, { id: pending.id });
     await pushHistory({ kind: 'errored', pending, error: e?.message });
+    await broadcastCommentary(tabId, {
+      kind: 'errored',
+      message: `Order execution errored: ${e?.message || String(e)}`,
+    });
   } finally {
     await updateState({ pending: null });
   }
@@ -415,6 +431,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           }
           const tab = sender.tab || await findExnessTab();
           if (!tab) { sendResponse({ ok: false, reason: 'no_tab' }); return; }
+          await broadcastCommentary(tab.id, {
+            kind: 'approve',
+            message: `You approved ${pending.side.toUpperCase()} @ ${pending.entry}. Submitting…`,
+          });
           await executePending(tab.id, pending);
           sendResponse({ ok: true });
           return;
@@ -422,6 +442,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         case 'USER_REJECT': {
           await pushHistory({ kind: 'rejected', pendingId: msg.id, by: msg.by || 'user' });
           await updateState({ pending: null });
+          const tab = sender.tab || await findExnessTab();
+          if (tab) {
+            await broadcastCommentary(tab.id, {
+              kind: 'rejected',
+              message: `Signal rejected (by ${msg.by || 'user'}). Back to scanning.`,
+            });
+          }
           sendResponse({ ok: true });
           return;
         }
