@@ -100,6 +100,7 @@ const SETTINGS_FIELDS = [
   ['minAtrUsd',        'signal.minAtrUsd'],
   ['cooldownSec',      'signal.cooldownSec'],
   ['pollEverySec',     'signal.pollEverySec'],
+  ['ignoreSession',    'signal.ignoreSession'],
   ['lotSize',          'risk.lotSize'],
   ['tpAtrMult',        'risk.tpAtrMult'],
   ['slAtrMult',        'risk.slAtrMult'],
